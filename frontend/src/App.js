@@ -7,6 +7,7 @@ import Signup from "./pages/Signup";
 import HomePage from "./pages/HomePage";
 import DataCleaner from "./pages/DataCleaner";
 import FileToTableConverter from "./pages/FileToTableConverter";
+import Dashboard from "./pages/Dashboard";
 
 function App() {
   return (
@@ -17,10 +18,12 @@ function App() {
           <Route path="/" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
 
+
           {/* Main Pages */}
           <Route path="/homepage" element={<HomePage />} />
           <Route path="/data-cleaning" element={<DataCleaner />} />
           <Route path="/ai-conversion" element={<FileToTableConverter />} />
+          <Route path="/dashboard" element={<Dashboard />} />
         </Routes>
       </div>
     </Router>

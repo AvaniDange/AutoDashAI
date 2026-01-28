@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import logo from "../img/logo.png"; 
+import { useNavigate } from 'react-router-dom';
+import logo from "../img/logo.png";
 
 const DataCleaner = () => {
+  const navigate = useNavigate();
   const [file, setFile] = useState(null);
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -74,6 +76,36 @@ const DataCleaner = () => {
   const cleanFile = () => fetchData("/api/clean", true);
   const cleanAndAnalyze = () => fetchData("/api/clean-and-analyze");
 
+  const visualizeData = async () => {
+    if (!file) return;
+    setLoading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/dashboard/start`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await response.json();
+      if (data.success) {
+        navigate('/dashboard', {
+          state: {
+            session_id: data.session_id,
+            charts: data.charts,
+            kpis: data.kpis // Pass KPIs to dashboard
+          }
+        });
+      } else {
+        setError(data.message || "Failed to start dashboard");
+      }
+    } catch (err) {
+      setError("Error connecting to dashboard service");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 bg-fixed w-full">
       <header className="bg-white shadow-sm w-full">
@@ -111,7 +143,7 @@ const DataCleaner = () => {
             </label>
             {file && (
               <p className="text-gray-600 mt-2">
-                Selected: <span className="font-semibold">{file.name}</span> 
+                Selected: <span className="font-semibold">{file.name}</span>
                 ({(file.size / 1024 / 1024).toFixed(2)} MB)
               </p>
             )}
@@ -141,6 +173,13 @@ const DataCleaner = () => {
                 className="bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50"
               >
                 {loading ? '🔍 Analyzing...' : '🔍 Analyze Data'}
+              </button>
+              <button
+                onClick={visualizeData}
+                disabled={loading}
+                className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-indigo-700 transition disabled:opacity-50"
+              >
+                {loading ? '📊 Generating...' : '📊 Visualize Dashboard'}
               </button>
               <button
                 onClick={cleanFile}
@@ -200,32 +239,32 @@ const DataCleaner = () => {
                 </div>
               </div>
 
-             {/* ✅ Original Data Preview (works for both analyze and clean-and-analyze) */}
-{(analysis.original_analysis?.preview || analysis.basic_info?.preview) && (
-  <div className="bg-gray-50 rounded-2xl p-6">
-    <h3 className="text-xl font-semibold text-gray-800 mb-4">👀 Original Data Preview</h3>
-    <div className="overflow-x-auto">
-      <table className="min-w-full bg-white rounded-lg overflow-hidden">
-        <thead className="bg-gray-100">
-          <tr>
-            {Object.keys(analysis.original_analysis?.preview?.[0] || analysis.basic_info?.preview?.[0] || {}).map((header) => (
-              <th key={header} className="px-4 py-2 text-left font-semibold text-gray-700">{header}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {(analysis.original_analysis?.preview || analysis.basic_info?.preview || []).map((row, index) => (
-            <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-              {Object.values(row).map((val, i) => (
-                <td key={i} className="px-4 py-2 border-t text-gray-600">{String(val)}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  </div>
-)}
+              {/* ✅ Original Data Preview (works for both analyze and clean-and-analyze) */}
+              {(analysis.original_analysis?.preview || analysis.basic_info?.preview) && (
+                <div className="bg-gray-50 rounded-2xl p-6">
+                  <h3 className="text-xl font-semibold text-gray-800 mb-4">👀 Original Data Preview</h3>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full bg-white rounded-lg overflow-hidden">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          {Object.keys(analysis.original_analysis?.preview?.[0] || analysis.basic_info?.preview?.[0] || {}).map((header) => (
+                            <th key={header} className="px-4 py-2 text-left font-semibold text-gray-700">{header}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(analysis.original_analysis?.preview || analysis.basic_info?.preview || []).map((row, index) => (
+                          <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                            {Object.values(row).map((val, i) => (
+                              <td key={i} className="px-4 py-2 border-t text-gray-600">{String(val)}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {/* ✅ Cleaned Data Preview */}
               {analysis.cleaned_analysis && (

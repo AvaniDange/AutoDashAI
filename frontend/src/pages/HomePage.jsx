@@ -3,7 +3,7 @@ import aiConvertor from "../img/ai_convertor.png";
 import dataCleaning from "../img/cleaner.png";
 import dashboarding from "../img/dashboard.png";
 import insightGeneration from "../img/insight.png";
-import logo from "../img/logo.png"; 
+import logo from "../img/logo.png";
 import { Link } from "react-router-dom";
 
 const HomePage = () => {
@@ -37,7 +37,7 @@ const HomePage = () => {
             </span>
           </h1>
           <p className="text-xl text-gray-600 mb-8 max-w-4xl mx-auto leading-relaxed">
-            AutoDashAI is an AI-powered web app that provides autonomous data analysis, dynamic visualization, and actionable insights.  
+            AutoDashAI is an AI-powered web app that provides autonomous data analysis, dynamic visualization, and actionable insights.
             Experience the future of data analysis with a friendly, futuristic, and light interface.
           </p>
         </div>
@@ -50,56 +50,58 @@ const HomePage = () => {
             Solutions for Every Industry
           </h2>
           <p className="text-lg text-gray-600 text-center mb-16 max-w-3xl mx-auto leading-relaxed">
-            AutoDash AI provides tailored solutions for startups, education, healthcare, and SMEs, 
+            AutoDash AI provides tailored solutions for startups, education, healthcare, and SMEs,
             transforming complex data into beautiful, intuitive dashboards.
           </p>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 max-w-7xl mx-auto">
             {/* AI Converter */}
-            {/* AI Converter */}
-<Link 
-  to="/ai-conversion"
-  className="block bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center hover:scale-105 transform duration-300"
->
-  <img 
-    src={aiConvertor} 
-    alt="AI Converter" 
-    className="w-40 h-45 mx-auto mb-6 object-contain" 
-  />
-  <h3 className="text-2xl font-semibold text-gray-800 mb-4">
-    AI Converter
-  </h3>
-  <p className="text-gray-600 text-lg leading-relaxed">
-    Convert PDFs and documents into structured tables using AI analysis.
-  </p>
-</Link>
+            <Link
+              to="/ai-conversion"
+              className="block bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center hover:scale-105 transform duration-300"
+            >
+              <img
+                src={aiConvertor}
+                alt="AI Converter"
+                className="w-40 h-45 mx-auto mb-6 object-contain"
+              />
+              <h3 className="text-2xl font-semibold text-gray-800 mb-4">
+                AI Converter
+              </h3>
+              <p className="text-gray-600 text-lg leading-relaxed">
+                Convert PDFs and documents into structured tables using AI analysis.
+              </p>
+            </Link>
 
             {/* Data Cleaning */}
-<Link 
-  to="/data-cleaning"
-  className="block bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center hover:scale-105 transform duration-300"
->
-  <img
-    src={dataCleaning}
-    alt="Data Cleaning"
-    className="w-40 h-40 mx-auto mb-6 object-contain"/>
-  <h3 className="text-2xl font-semibold text-gray-800 mb-4">
-    Data Cleaning
-  </h3>
-  <p className="text-gray-600 text-lg leading-relaxed">
-    Clean data by handling missing values and preparing for dashboards.
-  </p>
-</Link>
+            <Link
+              to="/data-cleaning"
+              className="block bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center hover:scale-105 transform duration-300"
+            >
+              <img
+                src={dataCleaning}
+                alt="Data Cleaning"
+                className="w-40 h-40 mx-auto mb-6 object-contain" />
+              <h3 className="text-2xl font-semibold text-gray-800 mb-4">
+                Data Cleaning
+              </h3>
+              <p className="text-gray-600 text-lg leading-relaxed">
+                Clean data by handling missing values and preparing for dashboards.
+              </p>
+            </Link>
 
 
             {/* Dashboard Generation */}
-            <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center">
+            <Link
+              to="/dashboard"
+              className="block bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center hover:scale-105 transform duration-300"
+            >
               <img src={dashboarding} alt="Dashboard Generation" className="w-40 h-40 mx-auto mb-6 object-contain" />
-              <h3 className="text-2xl font-semibold text-gray-800 mb-4">Dashboard Generation</h3>
+              <h3 className="text-2xl font-semibold text-gray-800 mb-4">Start Dashboard</h3>
               <p className="text-gray-600 text-lg leading-relaxed">
-                Automatically create dashboards and charts from your data tables.
+                Clean and visualize your data into beautiful, interactive dashboards.
               </p>
-            </div>
+            </Link>
 
             {/* Insight Generation */}
             <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center">

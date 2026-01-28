@@ -236,6 +236,78 @@ async def clean_and_analyze(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error processing file: {str(e)}")
 
+# ==================== Dashboard Routes ====================
+
+from dashboard_agent import DashboardAgent
+
+# Initialize Dashboard Agent
+dashboard_agent = DashboardAgent()
+
+@app.post("/api/dashboard/start")
+async def start_dashboard(file: UploadFile = File(...)):
+    """Convert/Clean file and generate initial dashboard"""
+    try:
+        # 1. Save and load file
+        file_content = await file.read()
+        file_wrapper = io.BytesIO(file_content)
+        
+        if file.filename.endswith(".csv"):
+            df = pd.read_csv(file_wrapper)
+        else:
+            df = pd.read_excel(file_wrapper)
+
+        # 2. Clean data (reuse existing cleaner)
+        df = clean_data(df)
+        df = safe_json(df)
+        
+        # 3. Start Dashboard Session
+        session_id, charts, kpis, columns = dashboard_agent.start_session(df)
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "charts": charts,
+            "kpis": kpis,
+            "columns": columns,
+            "message": "Dashboard initialized"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error starting dashboard: {str(e)}")
+
+@app.post("/api/dashboard/chat")
+async def dashboard_chat(payload: dict = Body(...)):
+    """
+    payload: { "session_id": "...", "message": "..." }
+    """
+    session_id = payload.get("session_id")
+    message = payload.get("message")
+    
+    if not session_id or not message:
+        raise HTTPException(status_code=400, detail="Missing session_id or message")
+        
+    charts, reply = dashboard_agent.process_prompt(session_id, message)
+    
+    if charts is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    return {
+        "success": True,
+        "charts": charts,
+        "reply": reply
+    }
+
+@app.get("/api/dashboard/{session_id}")
+async def get_dashboard_state(session_id: str):
+    session = dashboard_agent.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    return {
+        "success": True,
+        "charts": session["charts"],
+        "history": session["history"]
+    }
+
 # ==================== Common Routes ====================
 
 @app.get("/")
