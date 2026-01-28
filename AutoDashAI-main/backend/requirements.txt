@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+pandas
+numpy
+python-multipart
+python-docx
+pdfplumber
+Pillow
+pytesseract
+scikit-learn
+word2number
+openpyxl
+groq
+python-dotenv
