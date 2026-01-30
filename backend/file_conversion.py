@@ -2,7 +2,11 @@ import pandas as pd
 import pdfplumber
 from docx import Document
 from PIL import Image
-import pytesseract
+try:
+    import pytesseract
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
 import io
 import re
 from typing import Union, Dict, List, Optional

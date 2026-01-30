@@ -4,6 +4,7 @@ import json
 import uvicorn
 import pandas as pd
 import io
+import tempfile
 from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,21 +34,30 @@ app.add_middleware(
 # ==================== Helper Functions ====================
 async def process_uploaded_file(uploaded_file: UploadFile):
     """Process uploaded file and return structured data"""
+    print(f"DEBUG: Processing file: {uploaded_file.filename}")
+    temp_path = None
     try:
-        # Save uploaded file temporarily
+        # Save uploaded file to a temporary location outside the watched directory
         file_content = await uploaded_file.read()
-        temp_path = f"temp_{uploaded_file.filename}"
-        with open(temp_path, "wb") as f:
-            f.write(file_content)
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{uploaded_file.filename}") as tmp:
+            tmp.write(file_content)
+            temp_path = tmp.name
+        
+        print(f"DEBUG: Temporary file created at: {temp_path}")
 
-        # Process the file
-        result = converter.process_file(temp_path)
-
-        # Clean up temporary file
         try:
-            os.remove(temp_path)
-        except Exception:
-            pass
+            # Process the file
+            result = converter.process_file(temp_path)
+            print(f"DEBUG: File processing success: {result['success']}")
+        finally:
+            # Clean up temporary file
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                    print(f"DEBUG: Cleaned up temp file: {temp_path}")
+                except Exception as e:
+                    print(f"DEBUG: Failed to clean up temp file: {e}")
 
         if result['success']:
             response_data = {
@@ -148,12 +158,19 @@ async def analyze_data(file: UploadFile = File(...)):
     try:
         # Read file based on extension
         if file.filename.endswith(".csv"):
-            df = pd.read_csv(file.file)
+            try:
+                # Force engine='python' to avoid C-level buffer overflows
+                df = pd.read_csv(file.file, sep=None, engine='python', on_bad_lines='skip')
+                if len(df.columns) <= 1:
+                    file.file.seek(0)
+                    df = pd.read_csv(file.file, engine='python', on_bad_lines='skip')
+            except Exception:
+                file.file.seek(0)
+                df = pd.read_csv(file.file, engine='python', encoding='ISO-8859-1', on_bad_lines='skip')
         else:
-            file.file.seek(0)  # Reset file pointer for Excel reading
+            file.file.seek(0)
             df = pd.read_excel(file.file)
 
-        df = safe_json(df)
         issues = detect_issues(df)
         response_data = {
             "success": True,
@@ -166,7 +183,7 @@ async def analyze_data(file: UploadFile = File(...)):
             "issues": issues,
             "message": f"Analyzed {len(df)} rows and {len(df.columns)} columns"
         }
-        return JSONResponse(content=jsonable_encoder(response_data))
+        return safe_json(response_data)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error analyzing file: {str(e)}")
 
@@ -199,20 +216,28 @@ async def clean_uploaded_data(file: UploadFile = File(...)):
 @app.post("/api/clean-and-analyze")
 async def clean_and_analyze(file: UploadFile = File(...)):
     """Analyze both original and cleaned data and return both previews"""
+    print(f"DEBUG: /api/clean-and-analyze called for {file.filename}")
     try:
         # Read file based on extension
         if file.filename.endswith(".csv"):
-            df = pd.read_csv(file.file)
+            try:
+                df = pd.read_csv(file.file, sep=None, engine='python', on_bad_lines='skip')
+                if len(df.columns) <= 1:
+                    file.file.seek(0)
+                    df = pd.read_csv(file.file, engine='python', on_bad_lines='skip')
+            except Exception:
+                file.file.seek(0)
+                df = pd.read_csv(file.file, engine='python', encoding='ISO-8859-1', on_bad_lines='skip')
         else:
-            file.file.seek(0)  # Reset file pointer for Excel reading
+            file.file.seek(0)
             df = pd.read_excel(file.file)
 
-        df = safe_json(df)
+        print(f"DEBUG: Data loaded, cleaning and analyzing...")
         original_issues = detect_issues(df)
 
         cleaned_df = clean_data(df)
-        cleaned_df = safe_json(cleaned_df)
         cleaned_issues = detect_issues(cleaned_df)
+        print(f"DEBUG: Clean & Analyze complete. Improvement: {len(original_issues) - len(cleaned_issues)}")
 
         response = {
             "success": True,
@@ -231,7 +256,7 @@ async def clean_and_analyze(file: UploadFile = File(...)):
             "improvement": len(original_issues) - len(cleaned_issues)
         }
 
-        return JSONResponse(content=jsonable_encoder(response))
+        return safe_json(response)
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error processing file: {str(e)}")
@@ -246,24 +271,57 @@ dashboard_agent = DashboardAgent()
 @app.post("/api/dashboard/start")
 async def start_dashboard(file: UploadFile = File(...)):
     """Convert/Clean file and generate initial dashboard"""
+    print(f"DEBUG: /api/dashboard/start called for {file.filename}")
     try:
-        # 1. Save and load file
+        # 1. Load file
         file_content = await file.read()
         file_wrapper = io.BytesIO(file_content)
         
         if file.filename.endswith(".csv"):
-            df = pd.read_csv(file_wrapper)
+            print(f"DEBUG: Reading CSV with robust Python engine...")
+            try:
+                # Use engine='python' to avoid C-buffer overflow on large EEG data
+                df = pd.read_csv(io.BytesIO(file_content), sep=None, engine='python', on_bad_lines='skip')
+                
+                if len(df.columns) <= 1:
+                    # Retry with default comma if auto-detect failed
+                    df = pd.read_csv(io.BytesIO(file_content), engine='python', on_bad_lines='skip')
+            except Exception as e:
+                print(f"DEBUG: Standard read failed ({e}), trying ISO-8859-1 fallback...")
+                df = pd.read_csv(io.BytesIO(file_content), engine='python', encoding='ISO-8859-1', on_bad_lines='skip')
         else:
             df = pd.read_excel(file_wrapper)
 
+        original_size = len(df)
+        print(f"DEBUG: File loaded ({original_size} rows, {len(df.columns)} columns)")
+
+        # --- OPTIMIZATION FOR LARGE DATASETS ---
+        # If dataset is huge (like the 55MB EEG), sample it to keep the dashboard snappy
+        if len(df) > 50000:
+            print(f"DEBUG: Sampling large dataset from {len(df)} to 50,000 rows")
+            df = df.sample(50000, random_state=42)
+            
+        if len(df.columns) > 100:
+            print(f"DEBUG: Reducing column count from {len(df.columns)} to 100 for better performance")
+            # Prioritize numeric columns
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            other_cols = df.select_dtypes(exclude=[np.number]).columns.tolist()
+            keep_cols = (other_cols[:20] + numeric_cols[:80])[:100]
+            df = df[keep_cols]
+
         # 2. Clean data (reuse existing cleaner)
+        print(f"DEBUG: Cleaning data...")
         df = clean_data(df)
-        df = safe_json(df)
         
+        print(f"DEBUG: Starting dashboard session...")
         # 3. Start Dashboard Session
+        # IMPORTANT: session stores the processed DF. 
+        # We only safe_json the outputs, not the internal DF.
         session_id, charts, kpis, columns = dashboard_agent.start_session(df)
+        print(f"DEBUG: Dashboard started with Session ID: {session_id}")
         
-        return {
+        # 4. Final safety check on all JSON outputs
+        response_payload = {
             "success": True,
             "session_id": session_id,
             "charts": charts,
@@ -271,6 +329,7 @@ async def start_dashboard(file: UploadFile = File(...)):
             "columns": columns,
             "message": "Dashboard initialized"
         }
+        return safe_json(response_payload)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error starting dashboard: {str(e)}")
 
@@ -307,6 +366,74 @@ async def get_dashboard_state(session_id: str):
         "charts": session["charts"],
         "history": session["history"]
     }
+
+# ==================== Insight Generation Routes ====================
+
+from insight_agent import insight_agent
+from data_insights import generate_data_insights
+
+@app.post("/api/insights/generate")
+async def generate_insights(file: UploadFile = File(...)):
+    """Generate AI-powered insights from a dashboard image or PDF."""
+    try:
+        # Validate file type
+        allowed_types = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/pdf']
+        content_type = file.content_type
+        
+        if content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported file type: {content_type}. Please upload PNG, JPEG, WebP, or PDF."
+            )
+        
+        # Read file bytes
+        file_bytes = await file.read()
+        
+        # Generate insights using the insight agent
+        insights = insight_agent.analyze_dashboard_image(
+            file_bytes=file_bytes,
+            mime_type=content_type,
+            filename=file.filename
+        )
+        
+        return {
+            "success": True,
+            "insights": insights
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating insights: {str(e)}")
+
+@app.post("/api/dashboard/insights/{session_id}")
+async def get_dashboard_insights(session_id: str):
+    """Generate insights from dashboard session data."""
+    print(f"DEBUG: /api/dashboard/insights/ triggered for session: {session_id}")
+    try:
+        session = dashboard_agent.get_session(session_id)
+        if not session:
+            print(f"DEBUG: Insight Request Failed - Session {session_id} not found in memory (Backend likely restarted)")
+            raise HTTPException(status_code=404, detail="Dashboard session not found. Please re-upload your file.")
+        
+        df = session["df"]
+        charts = session["charts"]
+        
+        print(f"DEBUG: Generating insights for dataset ({len(df)} rows, {len(df.columns)} columns)...")
+        insights = generate_data_insights(df, charts)
+        print(f"DEBUG: Insights generation successful. {len(insights)} items found.")
+        
+        return safe_json({
+            "success": True,
+            "insights": insights
+        })
+        
+    except HTTPException:
+        # Re-raise standard HTTP errors (like 404) directly
+        raise
+    except Exception as e:
+        print(f"DEBUG: CRITICAL ERROR in insight generation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error analyzing dashboard: {str(e)}")
 
 # ==================== Common Routes ====================
 

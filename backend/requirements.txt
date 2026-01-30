@@ -12,3 +12,4 @@ word2number
 openpyxl
 groq
 python-dotenv
+google-generativeai

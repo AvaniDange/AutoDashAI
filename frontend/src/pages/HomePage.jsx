@@ -56,6 +56,7 @@ const HomePage = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 max-w-7xl mx-auto">
             {/* AI Converter */}
+            {/* AI Converter */}
             <Link
               to="/ai-conversion"
               className="block bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center hover:scale-105 transform duration-300"
@@ -93,7 +94,7 @@ const HomePage = () => {
 
             {/* Dashboard Generation */}
             <Link
-              to="/dashboard"
+              to="/data-cleaning"
               className="block bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center hover:scale-105 transform duration-300"
             >
               <img src={dashboarding} alt="Dashboard Generation" className="w-40 h-40 mx-auto mb-6 object-contain" />
@@ -104,13 +105,16 @@ const HomePage = () => {
             </Link>
 
             {/* Insight Generation */}
-            <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center">
+            <Link
+              to="/insight-generation"
+              className="block bg-white p-8 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition h-full text-center hover:scale-105 transform duration-300"
+            >
               <img src={insightGeneration} alt="Insight Generation" className="w-40 h-40 mx-auto mb-6 object-contain" />
-              <h3 className="text-2xl font-semibold text-gray-800 mb-4">Business Insights</h3>
+              <h3 className="text-2xl font-semibold text-gray-800 mb-4">Insight Generation</h3>
               <p className="text-gray-600 text-lg leading-relaxed">
                 Generate actionable insights and strategic recommendations.
               </p>
-            </div>
+            </Link>
           </div>
         </div>
       </section>

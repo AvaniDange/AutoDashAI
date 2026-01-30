@@ -62,7 +62,8 @@ const ChartItem = ({ chart }) => {
                             innerRadius={70}
                             outerRadius={100}
                             paddingAngle={2}
-                            dataKey="value"
+                            dataKey={dataKey}
+                            nameKey={xAxis}
                         >
                             {data.map((entry, index) => (
                                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} strokeWidth={0} />

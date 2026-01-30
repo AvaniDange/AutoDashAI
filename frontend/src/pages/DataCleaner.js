@@ -29,11 +29,17 @@ const DataCleaner = () => {
     const formData = new FormData();
     formData.append('file', file);
 
+    // Create an AbortController for timing out the request
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
     try {
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         method: 'POST',
         body: formData,
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         let errText;
@@ -60,13 +66,17 @@ const DataCleaner = () => {
       } else {
         const textData = await response.text();
         const data = JSON.parse(textData);
-        console.log("Cleaned Preview Data:", data.cleaned_analysis?.preview);
         setAnalysis(data);
       }
 
     } catch (err) {
+      clearTimeout(timeoutId);
       console.error("Frontend fetch error:", err);
-      setError(err.message || "An unexpected error occurred");
+      if (err.name === 'AbortError') {
+        setError("Request timed out. The server is taking too long to respond.");
+      } else {
+        setError(err.message || "An unexpected error occurred");
+      }
     } finally {
       setLoading(false);
     }
@@ -79,28 +89,54 @@ const DataCleaner = () => {
   const visualizeData = async () => {
     if (!file) return;
     setLoading(true);
+    setError(null);
+
     const formData = new FormData();
     formData.append('file', file);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/dashboard/start`, {
         method: 'POST',
         body: formData,
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        let errDetail = "Unknown server error";
+        try {
+          const errData = await response.json();
+          errDetail = errData.detail || errData.message || JSON.stringify(errData);
+        } catch (e) {
+          errDetail = await response.text();
+        }
+        throw new Error(errDetail);
+      }
+
       const data = await response.json();
       if (data.success) {
         navigate('/dashboard', {
           state: {
             session_id: data.session_id,
             charts: data.charts,
-            kpis: data.kpis // Pass KPIs to dashboard
+            kpis: data.kpis
           }
         });
       } else {
         setError(data.message || "Failed to start dashboard");
       }
     } catch (err) {
-      setError("Error connecting to dashboard service");
+      clearTimeout(timeoutId);
+      console.error("Dashboard error:", err);
+      if (err.name === 'AbortError') {
+        setError("Dashboard initialization timed out. The file might be too large or complex.");
+      } else {
+        setError(err.message || "An unexpected error occurred");
+      }
     } finally {
       setLoading(false);
     }
@@ -115,7 +151,7 @@ const DataCleaner = () => {
             <span className="text-2xl font-bold text-blue-600">AutoDashAI</span>
           </div>
           <nav className="flex items-center space-x-6">
-            <a href="#" className="text-gray-600 hover:text-blue-600 transition">Help</a>
+            <button className="text-gray-600 hover:text-blue-600 transition">Help</button>
           </nav>
         </div>
       </header>
