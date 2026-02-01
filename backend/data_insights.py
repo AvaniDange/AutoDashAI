@@ -97,10 +97,10 @@ def generate_data_insights(df: pd.DataFrame, charts: List[dict]) -> List[Dict[st
             "description": f"{missing_count} missing values detected in the dataset. These have likely been handled during cleaning, but monitor for data collection issues."
         })
     
-    # 7. Actionable recommendation
+    # 7. Strategic Recommendations
     insights.append({
-        "title": "Next Steps",
-        "description": "Use the chat interface to create custom charts, filter data by specific categories, or convert chart types for different perspectives on your data."
+        "title": "Business Recommendation",
+        "description": f"Based on the stability of {numeric_cols[0] if numeric_cols else 'metrics'}, we recommend focusing on the top-performing categories in {categorical_cols[0] if categorical_cols else 'the dataset'} to drive incremental growth."
     })
     
-    return insights[:6]  # Return top 6 insights
+    return insights[:6]

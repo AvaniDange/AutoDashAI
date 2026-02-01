@@ -25,9 +25,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # You can restrict this later for security
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -313,12 +313,10 @@ async def start_dashboard(file: UploadFile = File(...)):
         print(f"DEBUG: Cleaning data...")
         df = clean_data(df)
         
-        print(f"DEBUG: Starting dashboard session...")
         # 3. Start Dashboard Session
-        # IMPORTANT: session stores the processed DF. 
-        # We only safe_json the outputs, not the internal DF.
-        session_id, charts, kpis, columns = dashboard_agent.start_session(df)
-        print(f"DEBUG: Dashboard started with Session ID: {session_id}")
+        print(f"DEBUG: DF Types:\n{df.dtypes}")
+        session_id, charts, kpis, columns, slicers, pages = dashboard_agent.start_session(df)
+        print(f"DEBUG: Dashboard started. session_id={session_id}, slicers={len(slicers)}")
         
         # 4. Final safety check on all JSON outputs
         response_payload = {
@@ -327,6 +325,8 @@ async def start_dashboard(file: UploadFile = File(...)):
             "charts": charts,
             "kpis": kpis,
             "columns": columns,
+            "slicers": slicers,
+            "pages": pages,
             "message": "Dashboard initialized"
         }
         return safe_json(response_payload)
@@ -342,18 +342,17 @@ async def dashboard_chat(payload: dict = Body(...)):
     message = payload.get("message")
     
     if not session_id or not message:
+        print("DEBUG: Chat request missing session_id or message")
         raise HTTPException(status_code=400, detail="Missing session_id or message")
         
-    charts, reply = dashboard_agent.process_prompt(session_id, message)
+    print(f"DEBUG: Chat request for session {session_id}: {message}")
+    result = dashboard_agent.process_prompt(session_id, message)
     
-    if charts is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+    if result is None or result.get("charts") is None:
+        print(f"DEBUG: Session {session_id} not found or failed")
+        raise HTTPException(status_code=404, detail="Session not found or invalid")
         
-    return {
-        "success": True,
-        "charts": charts,
-        "reply": reply
-    }
+    return result
 
 @app.get("/api/dashboard/{session_id}")
 async def get_dashboard_state(session_id: str):
@@ -361,9 +360,17 @@ async def get_dashboard_state(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
         
+    active_idx = session.get("active_page_idx", 0)
+    active_page = session["pages"][active_idx]
+    
     return {
         "success": True,
-        "charts": session["charts"],
+        "charts": active_page["charts"],
+        "kpis": active_page.get("kpis", []),
+        "slicers": session.get("slicers", []),
+        "pages": session.get("pages", []),
+        "theme": session.get("theme", "light"),
+        "active_page_idx": active_idx,
         "history": session["history"]
     }
 
@@ -417,7 +424,8 @@ async def get_dashboard_insights(session_id: str):
             raise HTTPException(status_code=404, detail="Dashboard session not found. Please re-upload your file.")
         
         df = session["df"]
-        charts = session["charts"]
+        active_idx = session.get("active_page_idx", 0)
+        charts = session["pages"][active_idx]["charts"]
         
         print(f"DEBUG: Generating insights for dataset ({len(df)} rows, {len(df.columns)} columns)...")
         insights = generate_data_insights(df, charts)

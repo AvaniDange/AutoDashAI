@@ -34,45 +34,135 @@ class DashboardAgent:
         session_id = str(uuid.uuid4())
         charts = self._generate_initial_charts(df)
         kpis = self._generate_kpi_cards(df)
+        slicers = self._generate_slicers(df)
+        
+        # Initial Page 1
+        pages = [
+            {"id": "page1", "name": "Overview", "charts": charts, "kpis": kpis}
+        ]
         
         self.sessions[session_id] = {
             "df": df,
-            "charts": charts,
-            "kpis": kpis,
+            "original_df": df.copy(), # Keep for resetting filters
+            "active_page_idx": 0,
+            "pages": pages,
+            "slicers": slicers,
             "history": [],
-            "last_active_chart_idx": 0 if charts else None # Track context
+            "last_active_chart_idx": 0 if charts else None,
+            "theme": "light" # Default theme
         }
-        return session_id, charts, kpis, df.columns.tolist()
+        return session_id, charts, kpis, df.columns.tolist(), slicers, pages
+
+    def _generate_slicers(self, df):
+        """Identify columns suitable for global filtering (Broad detection)"""
+        slicers = []
+        all_cols = df.columns.tolist()
+        print(f"DEBUG: Generating slicers for {len(all_cols)} columns...")
+        
+        for col in all_cols:
+            # Skip floating point metrics (usually too many unique values)
+            if pd.api.types.is_float_dtype(df[col]):
+                continue
+                
+            unique_vals = [str(v) for v in df[col].dropna().unique().tolist()]
+            count = len(unique_vals)
+            
+            # Relaxed cardinality to 100 for large datasets
+            if 1 < count <= 100:
+                print(f"DEBUG: Slicer found: {col} ({count} options)")
+                slicers.append({
+                    "column": col,
+                    "options": sorted(unique_vals[:50]), # Limit dropdown UI size
+                    "active": None 
+                })
+            else:
+                print(f"DEBUG: Skipping {col} as slicer (Cardinality: {count})")
+                
+            if len(slicers) >= 12: break # Show up to 12 filters
+            
+        print(f"DEBUG: Total slicers generated: {len(slicers)}")
+        return slicers
 
     def get_session(self, session_id):
         return self.sessions.get(session_id)
         
     def _generate_kpi_cards(self, df):
-        """Generate summary cards for numeric columns (Smart & Generic)"""
+        """Generate high-impact summary cards with integrated analytical measures"""
         kpis = []
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        date_col = self._find_date_column(df)
         
-        # 1. Total Records (Generic)
-        kpis.append({"title": "Total Records", "value": f"{len(df):,}", "change": "Dataset Size"})
+        # Filter out columns that look like IDs (e.g., ORDERNUMBER, ID, UUID)
+        real_metrics = [
+            col for col in numeric_cols 
+            if not any(k in col.upper() for k in ["ID", "NUMBER", "CODE", "PHONE", "ZIP", "INDEX"])
+        ]
         
-        # 2. Key Numeric Metrics
-        for col in numeric_cols[:3]: 
+        # 1. Primary Growth Metric (MoM if dates exist)
+        if date_col and real_metrics:
+            primary_num = real_metrics[0]
+            measures = self._calculate_advanced_measures(df, date_col, primary_num)
+            if measures:
+                kpis.append({"title": f"{primary_num} (MTD)", "value": f"{measures['mtd']:,.0f}", "change": f"{measures['mom_growth']:+.1f}%"})
+                kpis.append({"title": f"{primary_num} (YTD)", "value": f"{measures['ytd']:,.0f}", "change": "Year-to-Date"})
+
+        # 2. Key Numeric Averages / Totals
+        for col in real_metrics[:2]:
+            if len(kpis) >= 4: break
             avg = df[col].mean()
-            if avg > 1000:
-                val = df[col].sum()
-                title = f"Total {col}"
-            else:
-                val = avg
-                title = f"Avg {col}"
-                
-            if val > 1_000_000_000: val_str = f"{val/1_000_000_000:.1f}B"
-            elif val > 1_000_000: val_str = f"{val/1_000_000:.1f}M"
-            elif val > 1_000: val_str = f"{val/1_000:.1f}K"
-            elif val == int(val): val_str = f"{int(val)}"
-            else: val_str = f"{val:.2f}"
-                
-            kpis.append({"title": title, "value": val_str, "change": f"{np.random.randint(-5, 10)}%"})
+            val_str = self._format_value(avg)
+            kpis.append({"title": f"Avg {col}", "value": val_str, "change": "Metric"})
+            
+        # 3. Fallback: Total Records if grid not full
+        if len(kpis) < 4:
+            kpis.append({"title": "Total Records", "value": f"{len(df):,}", "change": "Dataset Size"})
+            
         return kpis[:4]
+
+    def _format_value(self, val):
+        if val > 1_000_000_000: return f"{val/1_000_000_000:.1f}B"
+        if val > 1_000_000: return f"{val/1_000_000:.1f}M"
+        if val > 1_000: return f"{val/1_000:.1f}K"
+        return f"{val:.1f}" if val != int(val) else f"{int(val)}"
+
+    def _find_date_column(self, df):
+        """Identify the most likely date/time column for analysis"""
+        for col in df.columns:
+            low_col = col.lower()
+            if any(k in low_col for k in ['date', 'time', 'year', 'month', 'timestamp', 'dt']):
+                # Try to convert to datetime to verify
+                try:
+                    pd.to_datetime(df[col].iloc[:5], errors='raise')
+                    return col
+                except:
+                    continue
+        return None
+
+    def _calculate_advanced_measures(self, df, date_col, num_col):
+        """Calculate professional BI metrics: MTD, YTD, MoM%"""
+        try:
+            temp_df = df[[date_col, num_col]].copy()
+            temp_df[date_col] = pd.to_datetime(temp_df[date_col], errors='coerce')
+            temp_df = temp_df.dropna(subset=[date_col])
+            
+            if temp_df.empty: return None
+            
+            latest_date = temp_df[date_col].max()
+            current_month = latest_date.month
+            current_year = latest_date.year
+            
+            mtd = temp_df[(temp_df[date_col].dt.month == current_month) & (temp_df[date_col].dt.year == current_year)][num_col].sum()
+            ytd = temp_df[temp_df[date_col].dt.year == current_year][num_col].sum()
+            
+            # Prev Month
+            prev_m_date = latest_date - pd.DateOffset(months=1)
+            prev_mtd = temp_df[(temp_df[date_col].dt.month == prev_m_date.month) & (temp_df[date_col].dt.year == prev_m_date.year)][num_col].sum()
+            
+            mom_growth = ((mtd - prev_mtd) / prev_mtd * 100) if prev_mtd != 0 else 0
+            
+            return {"mtd": mtd, "ytd": ytd, "mom_growth": mom_growth}
+        except:
+            return None
 
     def process_prompt(self, session_id, message):
         session = self.sessions.get(session_id)
@@ -90,96 +180,102 @@ class DashboardAgent:
 
     def _process_local_advanced(self, session, message):
         df = session["df"]
-        charts = session["charts"]
         msg = message.lower()
         
-        # --- A. Extract Entities (Columns) ---
-        mentioned_cols = []
-        cols = df.columns.tolist()
-        for col in cols:
-            # Fuzzy match: "battery power" matches "battery_power"
-            clean_name = col.lower().replace('_', ' ').replace('-', ' ')
-            if clean_name in msg:
-                mentioned_cols.append(col)
+        # --- A. Global Commands (Theme, Pages, Filters) ---
+        if "dark mode" in msg or ("theme" in msg and "dark" in msg):
+            session["theme"] = "dark"
+            return self._wrap_response(session, "I've switched the dashboard to a premium Dark Mode. Do you like this look?")
 
-        # --- B. Determine Intent ---
+        if "light mode" in msg or ("theme" in msg and "light" in msg):
+            session["theme"] = "light"
+            return self._wrap_response(session, "Switched back to a crisp Light Mode for better clarity.")
+
+        # Page Switching
+        for i, page in enumerate(session["pages"]):
+            if page["name"].lower() in msg or f"page {i+1}" in msg:
+                session["active_page_idx"] = i
+                return self._wrap_response(session, f"Navigating to the '{page['name']}' page.")
+
+        # --- B. Entity Extraction ---
+        mentioned_cols = []
+        cols = session["original_df"].columns.tolist()
+        for col in cols:
+            clean_name = col.lower().replace('_', ' ').replace('-', ' ')
+            if clean_name in msg: mentioned_cols.append(col)
+
+        # Filters / Slicing
+        # "Filter by USA", "Show only Planes"
+        if any(w in msg for w in ["filter", "only show", "where"]):
+            for s in session["slicers"]:
+                for opt in s["options"]:
+                    if str(opt).lower() in msg:
+                        # Apply Filter
+                        session["df"] = session["original_df"][session["original_df"][s["column"]] == opt]
+                        s["active"] = opt
+                        # Re-generate current page for filtered context
+                        active_idx = session["active_page_idx"]
+                        session["pages"][active_idx]["charts"] = self._generate_initial_charts(session["df"])
+                        session["pages"][active_idx]["kpis"] = self._generate_kpi_cards(session["df"])
+                        return self._wrap_response(session, f"I've filtered all reports to show context for '{opt}'.")
+
+        # Reset filters
+        if "all data" in msg or "reset filter" in msg or "show everything" in msg:
+            session["df"] = session["original_df"].copy()
+            for s in session["slicers"]: s["active"] = None
+            active_idx = session["active_page_idx"]
+            session["pages"][active_idx]["charts"] = self._generate_initial_charts(session["df"])
+            session["pages"][active_idx]["kpis"] = self._generate_kpi_cards(session["df"])
+            return self._wrap_response(session, "Cleared all global filters. Showing the full dataset again.")
+
+        # --- C. Visual Modifications (Standard Chart Logic) ---
+        charts = session["pages"][session["active_page_idx"]]["charts"]
         
-        # 1. Intent: UPDATE / CHANGE (Context Aware)
-        # Keywords: change, switch, convert, this, it, update
+        # Intent: UPDATE
         if any(w in msg for w in ["change", "switch", "convert", "turn into", "make it", "update", "this"]):
             target_type = None
-            if "pie" in msg: target_type = "pie"
+            if "pie" in msg or "donut" in msg: target_type = "pie"
             elif "bar" in msg: target_type = "bar"
             elif "line" in msg: target_type = "line"
             elif "area" in msg: target_type = "area"
+            elif "scatter" in msg: target_type = "scatter"
+            elif "table" in msg: target_type = "table"
             
             if target_type:
                 target_idx = session.get("last_active_chart_idx", 0)
-                if mentioned_cols:
-                    for i, c in enumerate(charts):
-                        if c.get("dataKey") in mentioned_cols or c.get("xAxis") in mentioned_cols:
-                            target_idx = i
-                            break
-                            
                 if 0 <= target_idx < len(charts):
                     current_chart = charts[target_idx]
-                    
-                    # Smart Conversion for Pie
-                    if target_type == "pie" and current_chart["type"] != "pie":
-                        # Attempt to re-generate from scratch with the same columns for better aggregation
-                        cols_to_use = []
-                        if current_chart.get("xAxis") and current_chart["xAxis"] != "index":
-                            cols_to_use.append(current_chart["xAxis"])
-                        if current_chart.get("dataKey"):
-                            cols_to_use.append(current_chart["dataKey"])
-                        
-                        if cols_to_use:
-                            new_p = self._create_smart_chart(df, cols_to_use, preferred_type="pie")
-                            if new_p:
-                                charts[target_idx] = new_p
-                                return charts, f"I've converted '{current_chart['title']}' to a Pie chart with aggregated data."
-                    
                     current_chart["type"] = target_type
-                    session["last_active_chart_idx"] = target_idx
-                    return charts, f"I've updated the '{current_chart['title']}' to a {target_type.title()} chart."
+                    return self._wrap_response(session, f"Updated '{current_chart['title']}' to a {target_type.title()} view.")
             
-            return charts, "What type of chart should I change it to? (Bar, Pie, Line, Area)"
-            
-        # 2. Intent: CREATE / SHOW / ADD (New Chart)
-        # Keywords: add, create, show, give me, new
+        # Intent: CREATE
         elif any(w in msg for w in ["add", "create", "show", "give me", "new", "another"]) or mentioned_cols:
-            # Detect requested type
-            req_type = None
+            req_type = "bar"
             if "pie" in msg: req_type = "pie"
-            elif "bar" in msg: req_type = "bar"
-            elif "line" in msg: req_type = "line"
-            elif "area" in msg: req_type = "area"
+            elif "table" in msg: req_type = "table"
+            elif "scatter" in msg: req_type = "scatter"
+            
+            new_chart = self._create_smart_chart(session["df"], mentioned_cols or [cols[0]], preferred_type=req_type)
+            if new_chart:
+                charts.append(new_chart)
+                session["last_active_chart_idx"] = len(charts) - 1
+                return self._wrap_response(session, f"Added a professional {req_type} visual for {', '.join(mentioned_cols or ['data'])}.")
 
-            if mentioned_cols:
-                new_chart = self._create_smart_chart(df, mentioned_cols, preferred_type=req_type)
-                if new_chart:
-                    charts.append(new_chart)
-                    session["last_active_chart_idx"] = len(charts) - 1
-                    return charts, f"I've created a new {new_chart['type'].title()} chart for {', '.join(mentioned_cols)}."
-                else:
-                    return charts, f"I couldn't enable a chart for {', '.join(mentioned_cols)}. Try numeric columns."
-            else:
-                # Random chart but respect type
-                new_chart = self._create_random_chart(df, preferred_type=req_type)
-                if new_chart:
-                    charts.append(new_chart)
-                    session["last_active_chart_idx"] = len(charts) - 1
-                    return charts, f"I've added a new {new_chart['title']} ({new_chart['type']})."
+        return self._wrap_response(session, "I'm standing by to help you pivot data, add visuals, or apply global filters.")
 
-        # 3. Intent: REMOVE
-        elif "remove" in msg or "delete" in msg:
-            if charts:
-                removed = charts.pop()
-                session["last_active_chart_idx"] = max(0, len(charts) - 1)
-                return charts, f"I removed the '{removed['title']}' chart."
-            return charts, "No charts to remove."
-
-        return charts, "I'm listening. You can ask me to 'Add a chart for Sales' or 'Change this to Pie'."
+    def _wrap_response(self, session, reply):
+        """Standard wrapper to sync session state with frontend expectations"""
+        active_page = session["pages"][session["active_page_idx"]]
+        return {
+            "charts": active_page["charts"],
+            "kpis": active_page["kpis"],
+            "slicers": session["slicers"],
+            "pages": session["pages"],
+            "theme": session["theme"],
+            "active_page_idx": session["active_page_idx"],
+            "reply": reply,
+            "success": True
+        }
 
     def _create_smart_chart(self, df, cols, preferred_type=None):
         """Create a chart with sampled data to prevent UI lag"""
