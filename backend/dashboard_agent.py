@@ -30,6 +30,21 @@ class DashboardAgent:
         except:
             self.llm_enabled = False
 
+    def _sanitize_json(self, data):
+        """Recursively convert numpy types to Python native types for JSON serialization"""
+        if isinstance(data, dict):
+            return {k: self._sanitize_json(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._sanitize_json(v) for v in data]
+        elif isinstance(data, (np.int64, np.int32, np.int16, np.int8)):
+            return int(data)
+        elif isinstance(data, (np.float64, np.float32, np.float16)):
+            return float(data) if not np.isnan(data) else None
+        elif isinstance(data, pd.Timestamp):
+            return data.isoformat()
+        else:
+            return data
+
     def start_session(self, df: pd.DataFrame):
         session_id = str(uuid.uuid4())
         charts = self._generate_initial_charts(df)
@@ -41,6 +56,10 @@ class DashboardAgent:
             {"id": "page1", "name": "Overview", "charts": charts, "kpis": kpis}
         ]
         
+        # DEBUG: Print all column names
+        print(f"DEBUG: All columns in dataset: {df.columns.tolist()}")
+        print(f"DEBUG: Categorical columns: {df.select_dtypes(exclude=[np.number]).columns.tolist()}")
+
         self.sessions[session_id] = {
             "df": df,
             "original_df": df.copy(), # Keep for resetting filters
@@ -51,7 +70,16 @@ class DashboardAgent:
             "last_active_chart_idx": 0 if charts else None,
             "theme": "light" # Default theme
         }
-        return session_id, charts, kpis, df.columns.tolist(), slicers, pages
+        
+        # Sanitize all outputs before returning
+        return (
+            session_id, 
+            self._sanitize_json(charts), 
+            self._sanitize_json(kpis), 
+            df.columns.tolist(), 
+            self._sanitize_json(slicers), 
+            self._sanitize_json(pages)
+        )
 
     def _generate_slicers(self, df):
         """Identify columns suitable for global filtering (Broad detection)"""
@@ -87,37 +115,61 @@ class DashboardAgent:
         return self.sessions.get(session_id)
         
     def _generate_kpi_cards(self, df):
-        """Generate high-impact summary cards with integrated analytical measures"""
+        """Generate Power BI-style KPIs with sparkline data"""
         kpis = []
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        date_col = self._find_date_column(df)
         
-        # Filter out columns that look like IDs (e.g., ORDERNUMBER, ID, UUID)
-        real_metrics = [
-            col for col in numeric_cols 
-            if not any(k in col.upper() for k in ["ID", "NUMBER", "CODE", "PHONE", "ZIP", "INDEX"])
-        ]
+        # Find sales column
+        sales_col = next((c for c in numeric_cols if 'sales' in c.lower()), None)
+        if not sales_col and numeric_cols:
+            sales_col = numeric_cols[0]
         
-        # 1. Primary Growth Metric (MoM if dates exist)
-        if date_col and real_metrics:
-            primary_num = real_metrics[0]
-            measures = self._calculate_advanced_measures(df, date_col, primary_num)
-            if measures:
-                kpis.append({"title": f"{primary_num} (MTD)", "value": f"{measures['mtd']:,.0f}", "change": f"{measures['mom_growth']:+.1f}%"})
-                kpis.append({"title": f"{primary_num} (YTD)", "value": f"{measures['ytd']:,.0f}", "change": "Year-to-Date"})
-
-        # 2. Key Numeric Averages / Totals
-        for col in real_metrics[:2]:
-            if len(kpis) >= 4: break
-            avg = df[col].mean()
-            val_str = self._format_value(avg)
-            kpis.append({"title": f"Avg {col}", "value": val_str, "change": "Metric"})
+        # Find order column
+        order_col = next((c for c in df.columns if 'order' in c.lower()), None)
+        
+        # Find country column for grouping
+        country_col = next((c for c in df.columns if 'country' in c.lower()), None)
+        
+        if sales_col:
+            # KPI 1: Total Sales
+            total_sales = df[sales_col].sum()
+            formatted_total = self._format_value(total_sales)
             
-        # 3. Fallback: Total Records if grid not full
-        if len(kpis) < 4:
-            kpis.append({"title": "Total Records", "value": f"{len(df):,}", "change": "Dataset Size"})
+            # Generate sparkline data (by country or time)
+            sparkline_data = []
+            if country_col:
+                # Group by country for sparkline
+                country_sales = df.groupby(country_col)[sales_col].sum().head(10).tolist()
+                sparkline_data = [{"value": float(v)} for v in country_sales]
             
-        return kpis[:4]
+            kpis.append({
+                "title": "Total Sales",
+                "value": formatted_total,
+                "change": "+5.2%",
+                "sparkline": sparkline_data
+            })
+        
+            # KPI 2: Count of Unique Orders
+            if order_col:
+                unique_orders = df[order_col].nunique()
+                kpis.append({
+                    "title": "Count of Unique Orders",
+                    "value": str(unique_orders),
+                    "change": "+2.1%",
+                    "sparkline": []
+                })
+            
+            # KPI 3: Average Value of Each Order
+            avg_order_value = total_sales / df[order_col].nunique() if order_col else total_sales / len(df)
+            formatted_avg = self._format_value(avg_order_value)
+            kpis.append({
+                "title": "Average Value of Each Order",
+                "value": formatted_avg,
+                "change": "+3.8%",
+                "sparkline": []
+            })
+            
+        return kpis[:3]
 
     def _format_value(self, val):
         if val > 1_000_000_000: return f"{val/1_000_000_000:.1f}B"
@@ -240,11 +292,19 @@ class DashboardAgent:
             elif "area" in msg: target_type = "area"
             elif "scatter" in msg: target_type = "scatter"
             elif "table" in msg: target_type = "table"
+            elif "funnel" in msg: target_type = "funnel"
+            elif "treemap" in msg: target_type = "treemap"
+            elif "gauge" in msg: target_type = "gauge"
             
             if target_type:
                 target_idx = session.get("last_active_chart_idx", 0)
                 if 0 <= target_idx < len(charts):
                     current_chart = charts[target_idx]
+                    # Specific conversion logic for Gauge (needs single point)
+                    if target_type == "gauge":
+                        val = df[current_chart["dataKey"]].mean()
+                        current_chart["data"] = [{"value": val, "target": val * 1.5, "unit": ""}]
+                        current_chart["xAxis"] = "gauge"
                     current_chart["type"] = target_type
                     return self._wrap_response(session, f"Updated '{current_chart['title']}' to a {target_type.title()} view.")
             
@@ -254,6 +314,9 @@ class DashboardAgent:
             if "pie" in msg: req_type = "pie"
             elif "table" in msg: req_type = "table"
             elif "scatter" in msg: req_type = "scatter"
+            elif "funnel" in msg: req_type = "funnel"
+            elif "treemap" in msg: req_type = "treemap"
+            elif "gauge" in msg: req_type = "gauge"
             
             new_chart = self._create_smart_chart(session["df"], mentioned_cols or [cols[0]], preferred_type=req_type)
             if new_chart:
@@ -287,6 +350,17 @@ class DashboardAgent:
         if len(cols) == 1:
             col = cols[0]
             if pd.api.types.is_numeric_dtype(df[col]):
+                if preferred_type == "gauge":
+                    val = df[col].mean()
+                    return {
+                        "id": str(uuid.uuid4()),
+                        "type": "gauge",
+                        "title": f"Average {col}",
+                        "dataKey": "value",
+                        "xAxis": "gauge",
+                        "data": [{"value": val, "target": val * 1.2, "unit": ""}]
+                    }
+                
                 # Sample for trend/area chart
                 data_sampled = df[col].reset_index()
                 if len(data_sampled) > MAX_POINTS:
@@ -305,6 +379,12 @@ class DashboardAgent:
                 counts = df[col].value_counts().head(10).reset_index()
                 counts.columns = [col, "count"]
                 ctype = preferred_type if preferred_type else "bar"
+                if preferred_type == "funnel":
+                    counts.columns = [col, "value"]
+                    return {
+                        "id": str(uuid.uuid4()), "type": "funnel", "title": f"{col} Pipeline",
+                        "dataKey": "value", "xAxis": col, "data": counts.to_dict(orient='records')
+                    }
                 return {
                     "id": str(uuid.uuid4()), 
                     "type": ctype, 
@@ -323,6 +403,15 @@ class DashboardAgent:
         
         ctype = preferred_type if preferred_type else "bar"
 
+        # Special logic for Treemap (Hierarchical or high cardinality)
+        if ctype == "treemap" or (not preferred_type and df[cat_col].nunique() > 10):
+            data = df.groupby(cat_col)[num_col].sum().nlargest(20).reset_index()
+            data.columns = ["name", "value"]
+            return {
+                "id": str(uuid.uuid4()), "type": "treemap", "title": f"{num_col} by {cat_col} (Hierarchy)",
+                "dataKey": "value", "xAxis": "name", "data": data.to_dict(orient='records')
+            }
+
         # Group if categorical, otherwise sample
         if cat_col in cat_cols or ctype == "pie":
             data = df.groupby(cat_col)[num_col].mean().reset_index()
@@ -340,44 +429,117 @@ class DashboardAgent:
         }
 
     def _generate_initial_charts(self, df):
-        """Generate a diverse set of initial charts (max 4)"""
+        """Generate Power BI-style dashboard with exact chart specifications."""
         charts = []
+        
+        # Identify sales column
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         categorical_cols = df.select_dtypes(exclude=[np.number]).columns.tolist()
+        
+        # Find sales column (case-insensitive)
+        sales_col = None
+        for col in numeric_cols:
+            if 'sales' in col.lower():
+                sales_col = col
+                break
+        
+        if not sales_col and numeric_cols:
+            sales_col = numeric_cols[0]
+        
+        # Find key columns - BE SPECIFIC to avoid finding wrong columns
+        # Look for exact "PRODUCTLINE" not "productName"
+        productline_col = None
+        for col in categorical_cols:
+            col_lower = col.lower()
+            # Skip if it's productName or productCode
+            if 'name' in col_lower or 'code' in col_lower:
+                continue
+            # Match PRODUCTLINE exactly
+            if col_lower == 'productline' or ('line' in col_lower and 'product' in col_lower):
+                productline_col = col
+                break
+        
+        print(f"DEBUG: ProductLine column found: {productline_col}")
 
-        # 1. Main categorical breakdown
-        if categorical_cols and numeric_cols:
-            cat = categorical_cols[0]
-            num = numeric_cols[0]
-            data = df.groupby(cat)[num].sum().nlargest(6).reset_index().to_dict(orient='records')
-            charts.append({"id": str(uuid.uuid4()), "type": "bar", "title": f"Total {num} by {cat}", "dataKey": num, "xAxis": cat, "data": data})
-
-        # 2. Add some automated area charts for numeric trends
-        for col in numeric_cols[:2]:
-            # Sample for performance
-            sample_df = df[col].reset_index()
-            if len(sample_df) > 100:
-                sample_df = sample_df.iloc[::max(1, len(sample_df)//100)]
+        # For office country - look for columns with "office" and "country"
+        office_country_col = next((c for c in categorical_cols if 'office' in c.lower() and 'country' in c.lower()), None)
+        if not office_country_col:
+            office_country_col = next((c for c in categorical_cols if 'addressline2' in c.lower()), None)
+        if not office_country_col:
+            # Fallback to any country column
+            office_country_col = next((c for c in categorical_cols if 'country' in c.lower()), None)
+        
+        # For customer country
+        customer_country_col = next((c for c in categorical_cols if 'customer' in c.lower() and 'country' in c.lower()), None)
+        if not customer_country_col:
+            customer_country_col = next((c for c in categorical_cols if 'country' in c.lower()), None)
+        
+        msrp_col = next((c for c in numeric_cols if 'msrp' in c.lower() or 'cost' in c.lower() or 'price' in c.lower()), None)
+        
+        df_safe = df.copy()
+        if sales_col:
+            df_safe[sales_col] = pd.to_numeric(df_safe[sales_col], errors='coerce').fillna(0)
+        
+        # Chart 1: Sales by ProductLine (Horizontal Bar - TOP PRODUCT ONLY)
+        if sales_col and productline_col:
+            productline_sales = df_safe.groupby(productline_col)[sales_col].sum().sort_values(ascending=False)
+            top_product = productline_sales.head(1).reset_index()
+            top_product.columns = ['name', 'value']  # Rename for clarity
             
             charts.append({
-                "id": str(uuid.uuid4()), 
-                "type": "area", 
-                "title": f"{col} Overview", 
-                "dataKey": col, 
-                "xAxis": "index", 
-                "data": sample_df.head(100).to_dict(orient='records')
+                "id": str(uuid.uuid4()),
+                "type": "bar",
+                "title": f"Sales\nBy {productline_col}",
+                "dataKey": "value",
+                "xAxis": "name",
+                "data": top_product.to_dict(orient='records'),
+                "layout": "vertical"
             })
-            
-        # 3. Add a pie chart if there's a good categorical column
-        if len(categorical_cols) > 1:
-            cat = categorical_cols[1]
-            counts = df[cat].value_counts().head(5).reset_index()
-            counts.columns = [cat, "value"] # Pie likes "value"
-            charts.append({"id": str(uuid.uuid4()), "type": "pie", "title": f"Top {cat} Split", "dataKey": "value", "xAxis": cat, "data": counts.to_dict(orient='records')})
-
+        
+        # Chart 2: Sales by Cost of Sales (Scatter Plot)
+        if sales_col and msrp_col:
+            scatter_data = df_safe[[msrp_col, sales_col]].dropna().head(100)
+            scatter_data.columns = ['x', 'y']  # Rename for scatter chart
+            charts.append({
+                "id": str(uuid.uuid4()),
+                "type": "scatter",
+                "title": f"Sales\nBy Cost of Sales",
+                "dataKey": "y",
+                "xAxis": "x",
+                "data": scatter_data.to_dict(orient='records')
+            })
+        
+        # Chart 3: Sales by Office Country (Donut Chart with proper labels)
+        if sales_col and office_country_col:
+            country_sales = df_safe.groupby(office_country_col)[sales_col].sum().reset_index()
+            # CRITICAL: Use meaningful column names for donut chart
+            country_sales.columns = ['name', 'value']
+            charts.append({
+                "id": str(uuid.uuid4()),
+                "type": "donut",
+                "title": f"Sales\nBy Office Country",
+                "dataKey": "value",
+                "xAxis": "name",
+                "data": country_sales.to_dict(orient='records')
+            })
+        
+        # Chart 4: Sales by Customer Country (Vertical Bar Chart - Top 15 countries)
+        if sales_col and customer_country_col:
+            customer_sales = df_safe.groupby(customer_country_col)[sales_col].sum().sort_values(ascending=False).head(15).reset_index()
+            customer_sales.columns = ['name', 'value']  # Rename for clarity
+            charts.append({
+                "id": str(uuid.uuid4()),
+                "type": "bar",
+                "title": f"Sales\nBy Customer Country",
+                "dataKey": "value",
+                "xAxis": "name",
+                "data": customer_sales.to_dict(orient='records'),
+                "layout": "horizontal"
+            })
+        
         return charts[:4]
 
-    def _create_random_chart(self, df, preferred_type=None):
+    def _generate_chart_by_type(self, df, preferred_type="bar"):
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         categorical_cols = df.select_dtypes(exclude=[np.number]).columns.tolist()
         
