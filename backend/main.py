@@ -3,6 +3,7 @@ import argparse
 import json
 import uvicorn
 import pandas as pd
+import numpy as np
 import io
 import tempfile
 from typing import List
@@ -11,8 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.encoders import jsonable_encoder
 
-from file_conversion import FileConverter
-from data_cleaner import detect_issues, clean_data, safe_json  # keep your existing cleaner
+from backend.file_conversion import FileConverter
+from backend.data_cleaner import detect_issues, clean_data, safe_json  # keep your existing cleaner
 
 # Initialize the file converter
 converter = FileConverter()
@@ -263,7 +264,7 @@ async def clean_and_analyze(file: UploadFile = File(...)):
 
 # ==================== Dashboard Routes ====================
 
-from dashboard_agent import DashboardAgent
+from backend.dashboard_agent import DashboardAgent
 
 # Initialize Dashboard Agent
 dashboard_agent = DashboardAgent()
@@ -295,12 +296,9 @@ async def start_dashboard(file: UploadFile = File(...)):
         original_size = len(df)
         print(f"DEBUG: File loaded ({original_size} rows, {len(df.columns)} columns)")
 
-        # --- OPTIMIZATION FOR LARGE DATASETS ---
-        # If dataset is huge (like the 55MB EEG), sample it to keep the dashboard snappy
-        if len(df) > 50000:
-            print(f"DEBUG: Sampling large dataset from {len(df)} to 50,000 rows")
-            df = df.sample(50000, random_state=42)
-            
+        # NOTE: No row sampling — the visualization engine uses aggregations
+        # that are efficient on full datasets regardless of size.
+        
         if len(df.columns) > 100:
             print(f"DEBUG: Reducing column count from {len(df.columns)} to 100 for better performance")
             # Prioritize numeric columns
@@ -376,8 +374,8 @@ async def get_dashboard_state(session_id: str):
 
 # ==================== Insight Generation Routes ====================
 
-from insight_agent import insight_agent
-from data_insights import generate_data_insights
+from backend.insight_agent import insight_agent
+from backend.data_insights import generate_data_insights
 
 @app.post("/api/insights/generate")
 async def generate_insights(file: UploadFile = File(...)):
@@ -414,9 +412,10 @@ async def generate_insights(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Error generating insights: {str(e)}")
 
 @app.post("/api/dashboard/insights/{session_id}")
-async def get_dashboard_insights(session_id: str):
-    """Generate insights from dashboard session data."""
-    print(f"DEBUG: /api/dashboard/insights/ triggered for session: {session_id}")
+async def get_dashboard_insights(session_id: str, payload: dict = Body(default={})):
+    """Generate insights from dashboard session data. Accepts optional { language: 'Hindi' }."""
+    language = payload.get("language", "English") if payload else "English"
+    print(f"DEBUG: /api/dashboard/insights/ triggered for session: {session_id}, language: {language}")
     try:
         session = dashboard_agent.get_session(session_id)
         if not session:
@@ -427,8 +426,8 @@ async def get_dashboard_insights(session_id: str):
         active_idx = session.get("active_page_idx", 0)
         charts = session["pages"][active_idx]["charts"]
         
-        print(f"DEBUG: Generating insights for dataset ({len(df)} rows, {len(df.columns)} columns)...")
-        insights = generate_data_insights(df, charts)
+        print(f"DEBUG: Generating insights for dataset ({len(df)} rows, {len(df.columns)} columns) in {language}...")
+        insights = generate_data_insights(df, charts, language=language)
         print(f"DEBUG: Insights generation successful. {len(insights)} items found.")
         
         return safe_json({

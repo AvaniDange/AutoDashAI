@@ -2,7 +2,7 @@
 venv/
 env/
 ENV/
-.venv
+.venv/
 
 # Python
 __pycache__/
@@ -40,8 +40,30 @@ node_modules/
 .env.development.local
 .env.test.local
 .env.production.local
-npm-debug.log
-yarn-error.log
+npm-debug.log*
+yarn-error.log*
+yarn-debug.log*
 
 # Environment variables
 .env
+
+# Uploaded/temp files
+backend/uploads/
+backend/temp/
+*.tmp
+*.bak
+
+# Frontend build
+frontend/build/
+frontend/dist/
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Gemini/Agent artifacts
+.gemini/
+.agents/

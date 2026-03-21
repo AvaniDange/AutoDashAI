@@ -1,6 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, User, Bot, Loader2 } from 'lucide-react';
 
+const SUGGESTION_CHIPS = [
+    '📊 Show top categories',
+    '📈 Show trends over time',
+    '🥧 Change to pie chart',
+    '🔍 Filter by region',
+    '🔄 Reset dashboard',
+    '🌙 Dark mode',
+];
+
 const ChatInterface = ({ messages, onSendMessage, loading, theme }) => {
     const isDark = theme === 'dark';
     const [input, setInput] = useState('');
@@ -41,14 +50,29 @@ const ChatInterface = ({ messages, onSendMessage, loading, theme }) => {
             {/* Messages */}
             <div className={`flex-1 overflow-y-auto p-4 space-y-6 ${isDark ? 'bg-slate-950/20' : 'bg-gray-50/30'}`}>
                 {messages.length === 0 && (
-                    <div className="flex flex-col items-center justify-center h-full text-center px-6 opacity-60">
+                    <div className="flex flex-col items-center justify-center h-full text-center px-6">
                         <div className={`w-14 h-14 rounded-3xl flex items-center justify-center mb-5 ${isDark ? 'bg-slate-800 text-indigo-400' : 'bg-blue-50 text-blue-500'}`}>
                             <Bot size={28} />
                         </div>
                         <p className={`font-black text-sm uppercase tracking-widest mb-2 ${isDark ? 'text-slate-400' : 'text-gray-800'}`}>Ready to Assist</p>
-                        <p className={`text-xs ${isDark ? 'text-slate-500' : 'text-gray-500'} leading-relaxed max-w-[200px]`}>
-                            "Change the sales chart to a donut view" or "Filter for the USA region"
+                        <p className={`text-xs ${isDark ? 'text-slate-500' : 'text-gray-500'} leading-relaxed max-w-[250px] mb-5`}>
+                            Ask me anything about your data! Try one of these:
                         </p>
+                        <div className="flex flex-wrap gap-2 justify-center max-w-[320px]">
+                            {SUGGESTION_CHIPS.map((chip, idx) => (
+                                <button
+                                    key={idx}
+                                    onClick={() => onSendMessage(chip)}
+                                    disabled={loading}
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 border ${isDark
+                                        ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:border-indigo-500/50'
+                                        : 'bg-white border-gray-200 text-gray-600 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700'
+                                    }`}
+                                >
+                                    {chip}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 )}
 
@@ -104,7 +128,7 @@ const ChatInterface = ({ messages, onSendMessage, loading, theme }) => {
                     </button>
                 </form>
                 <div className="text-center mt-3">
-                    <p className={`text-[10px] font-bold uppercase tracking-widest ${isDark ? 'text-slate-600' : 'text-gray-400'}`}>Power BI AI Engine active</p>
+                    <p className={`text-[10px] font-bold uppercase tracking-widest ${isDark ? 'text-slate-600' : 'text-gray-400'}`}>Gemini-Powered AI Engine</p>
                 </div>
             </div>
         </div>

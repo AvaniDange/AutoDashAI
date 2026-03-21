@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ChartGrid from '../components/ChartGrid';
 import ChatInterface from '../components/ChatInterface';
-import { LayoutDashboard, ArrowLeft, Download, BrainCircuit, X, Filter, Moon, Sun, ChevronRight, Layers } from 'lucide-react';
+import { LayoutDashboard, ArrowLeft, Download, BrainCircuit, X, Filter, Moon, Sun, ChevronRight, Layers, Languages } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 
@@ -24,6 +24,7 @@ const Dashboard = () => {
     const [insights, setInsights] = useState(null);
     const [showInsights, setShowInsights] = useState(false);
     const [loadingInsights, setLoadingInsights] = useState(false);
+    const [insightLanguage, setInsightLanguage] = useState('English');
 
     const API_BASE_URL = window.location.origin.includes('localhost')
         ? `http://localhost:8000`
@@ -104,7 +105,9 @@ const Dashboard = () => {
         setLoadingInsights(true);
         try {
             const response = await fetch(`${API_BASE_URL}/api/dashboard/insights/${session_id}`, {
-                method: 'POST'
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ language: insightLanguage })
             });
 
             if (!response.ok) {
@@ -194,6 +197,22 @@ const Dashboard = () => {
                     >
                         {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
                     </button>
+                    <select
+                        value={insightLanguage}
+                        onChange={(e) => setInsightLanguage(e.target.value)}
+                        className={`px-3 py-2.5 rounded-xl text-sm font-bold border transition-all outline-none cursor-pointer ${theme === 'dark'
+                            ? 'bg-slate-800 border-slate-700 text-slate-200'
+                            : 'bg-gray-100 border-gray-200 text-gray-700'}`}
+                    >
+                        <option value="English">🌐 English</option>
+                        <option value="Hindi">🇮🇳 हिंदी</option>
+                        <option value="Marathi">🇮🇳 मराठी</option>
+                        <option value="Gujarati">🇮🇳 ગુજરાતી</option>
+                        <option value="Tamil">🇮🇳 தமிழ்</option>
+                        <option value="Telugu">🇮🇳 తెలుగు</option>
+                        <option value="Kannada">🇮🇳 ಕನ್ನಡ</option>
+                        <option value="Bengali">🇮🇳 বাংলা</option>
+                    </select>
                     <button
                         onClick={handleGetInsights}
                         disabled={loadingInsights}
@@ -268,7 +287,7 @@ const Dashboard = () => {
                     <div id="dashboard-content" className="p-8 max-w-[1600px] mx-auto space-y-8">
                         {/* KPI Grid - Re-styled for Premium BI look */}
                         {kpis && kpis.length > 0 && (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-5">
                                 {kpis.map((kpi, idx) => (
                                     <div key={idx} className={`p-5 rounded-[2rem] transition-all shadow-md group border flex flex-col justify-between min-h-[140px] ${theme === 'dark'
                                         ? 'bg-slate-900 border-slate-800 hover:border-indigo-500/50 hover:shadow-indigo-500/5'
@@ -296,9 +315,9 @@ const Dashboard = () => {
                                                     }`}>
                                                     {kpi.change}
                                                 </span>
-                                                <span className={`text-[9px] font-bold ${theme === 'dark' ? 'text-slate-600' : 'text-gray-400'}`}>
-                                                    vs last month
-                                                </span>
+                                                {kpi.context && <span className={`text-[9px] font-bold ${theme === 'dark' ? 'text-slate-600' : 'text-gray-400'}`}>
+                                                    {kpi.context}
+                                                </span>}
                                             </div>
                                         </div>
                                     </div>

@@ -8,8 +8,10 @@ import { Table, ArrowUpRight, ArrowDownRight, MoreHorizontal } from 'lucide-reac
 const COLORS = ['#4F46E5', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
 
 const ChartItem = ({ chart, theme }) => {
-    const { type, title, data, dataKey, xAxis } = chart;
+    const { type, title, subtitle, data, dataKey, xAxis } = chart;
     const isDark = theme === 'dark';
+    // Map histogram to bar for rendering
+    const renderType = type === 'histogram' ? 'bar' : type;
 
     const CommonTooltip = () => (
         <Tooltip
@@ -30,7 +32,7 @@ const ChartItem = ({ chart, theme }) => {
     const gridColor = isDark ? '#1e293b' : '#f1f5f9';
 
     const renderChart = () => {
-        switch (type) {
+        switch (renderType) {
             case 'bar':
                 return (
                     <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -205,7 +207,10 @@ const ChartItem = ({ chart, theme }) => {
                     <div className={`p-2 rounded-xl shrink-0 ${isDark ? 'bg-slate-800 text-indigo-400' : 'bg-gray-50 text-blue-600'}`}>
                         {type === 'table' ? <Table size={16} /> : <ArrowUpRight size={16} />}
                     </div>
-                    <h3 className={`text-base font-black truncate tracking-tight ${isDark ? 'text-slate-100' : 'text-gray-800'}`} title={title}>{title}</h3>
+                    <div className="overflow-hidden">
+                        <h3 className={`text-base font-black truncate tracking-tight ${isDark ? 'text-slate-100' : 'text-gray-800'}`} title={title}>{title}</h3>
+                        {subtitle && <p className={`text-[10px] font-bold truncate ${isDark ? 'text-slate-500' : 'text-gray-400'}`}>{subtitle}</p>}
+                    </div>
                 </div>
                 <div className="flex items-center gap-2">
                     <div className={`text-[9px] px-2 py-0.5 rounded-full uppercase font-black tracking-widest transition-colors ${isDark ? 'bg-slate-800 text-slate-500 group-hover:text-indigo-400' : 'bg-gray-50 text-gray-400 group-hover:text-blue-500'
