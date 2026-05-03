@@ -13,3 +13,4 @@ openpyxl
 groq
 python-dotenv
 google-generativeai
+google-genai

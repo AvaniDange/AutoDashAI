@@ -4,71 +4,45 @@ import uuid
 import json
 import os
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Load env
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-# Gemini SDK
-try:
-    from google import genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-    print("⚠️ Install with: pip install google-genai")
-
+from backend.gemini_helpers import (
+    get_gemini_client, call_gemini, call_gemini_json,
+    call_gemini_fast, compute_data_hash, GEMINI_AVAILABLE,
+)
 from backend.visualization_engine import VisualizationEngine, profile_columns
 
 
 class DashboardAgent:
     def __init__(self):
         self.sessions = {}
-        self.gemini_enabled = False
         self.viz_engine = VisualizationEngine()
+        self._executor = ThreadPoolExecutor(max_workers=2)
 
-        # Initialize Gemini
-        try:
-            api_key = os.environ.get("GEMINI_API_KEY")
-            if GEMINI_AVAILABLE and api_key:
-                self.client = genai.Client(api_key=api_key)
-                self.gemini_enabled = True
-                print("✅ Gemini (google-genai) enabled")
-            else:
-                print("⚠️ Gemini not configured — using local engine only")
-        except Exception as e:
-            print(f"❌ Gemini init error: {e}")
+        # Initialize Gemini via shared helper
+        self.client = get_gemini_client()
+        self.gemini_enabled = self.client is not None
+        if self.gemini_enabled:
+            print("✅ Gemini (model cascade) enabled")
+        else:
+            print("⚠️ Gemini not configured — using local engine only")
 
-    # ================= GEMINI HELPERS =================
+    # ================= GEMINI HELPERS (via shared cascade) =================
     def _call_gemini(self, prompt: str) -> str:
-        """Call Gemini and return cleaned text."""
-        response = self.client.models.generate_content(
-            model="gemini-3.1-flash-lite-preview",
-            contents=prompt
-        )
-        text = response.text.strip()
-        # Strip markdown code fences
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        text = text.strip()
-        return text
+        """Call Gemini with automatic model cascade and return cleaned text."""
+        return call_gemini(prompt, client=self.client)
 
     def _call_gemini_json(self, prompt: str) -> dict:
-        """Call Gemini and parse JSON response."""
-        text = self._call_gemini(prompt)
-        return json.loads(text)
+        """Call Gemini with model cascade and parse JSON response."""
+        return call_gemini_json(prompt, client=self.client)
 
     # ================= SESSION START =================
     def start_session(self, df: pd.DataFrame):
         session_id = str(uuid.uuid4())
         profiles = profile_columns(df)
 
-        # --- Gemini Pre-Analysis: let AI suggest optimal charts ---
-        charts, kpis = self._gemini_pre_analysis(df, profiles)
+        # --- Gemini Pre-Analysis + KPIs in PARALLEL for speed ---
+        charts, kpis = self._parallel_pre_analysis(df, profiles)
 
         slicers = self._generate_slicers(df)
         pages = [{"id": "page1", "name": "Overview", "charts": charts, "kpis": kpis}]
@@ -83,6 +57,7 @@ class DashboardAgent:
             "last_active_chart_idx": 0 if charts else None,
             "theme": "light",
             "profiles": profiles,
+            "data_hash": compute_data_hash(df.shape, df.columns.tolist()),
         }
 
         return session_id, charts, kpis, df.columns.tolist(), slicers, pages
@@ -90,10 +65,44 @@ class DashboardAgent:
     def get_session(self, session_id):
         return self.sessions.get(session_id)
 
+    # ================= PARALLEL PRE-ANALYSIS (Performance) =================
+    def _parallel_pre_analysis(self, df, profiles):
+        """
+        Run Gemini chart pre-analysis and KPI generation concurrently.
+        Cuts dashboard startup time by running both in parallel.
+        """
+        charts = []
+        kpis = []
+
+        if not self.gemini_enabled:
+            return self.viz_engine.generate_dashboard(df)
+
+        try:
+            # Submit both tasks concurrently
+            future_charts = self._executor.submit(self._gemini_pre_analysis, df, profiles)
+            future_kpis = self._executor.submit(self.viz_engine._generate_smart_kpis, df, profiles)
+
+            # Collect results
+            gemini_charts, _ = future_charts.result(timeout=30)
+            kpis = future_kpis.result(timeout=10)
+
+            if gemini_charts:
+                charts = gemini_charts
+            else:
+                charts, kpis = self.viz_engine.generate_dashboard(df)
+
+        except Exception as e:
+            print(f"⚠️ Parallel pre-analysis failed ({e}), falling back to serial")
+            traceback.print_exc()
+            charts, kpis = self.viz_engine.generate_dashboard(df)
+
+        return charts, kpis
+
     # ================= GEMINI PRE-ANALYSIS =================
     def _gemini_pre_analysis(self, df, profiles):
         """
         Ask Gemini to analyze the dataset and suggest the best charts.
+        Uses the FAST model (gemini-2.0-flash) for speed.
         Falls back to local engine if Gemini is unavailable.
         """
         if not self.gemini_enabled:
@@ -140,7 +149,13 @@ RULES:
 - Titles should be simple and clear (e.g., "Top Products by Sales", "Monthly Revenue Trend")
 - Return ONLY the JSON array, nothing else
 """
-            result = self._call_gemini_json(prompt)
+            # Use FAST model for chart suggestions — speed matters more than depth here
+            result = call_gemini_json(
+                prompt,
+                client=self.client,
+                models=["gemini-3.1-flash-lite-preview"],  # Fast model only
+                use_cache=True,
+            )
 
             if not isinstance(result, list):
                 raise ValueError("Gemini did not return a list")
@@ -159,7 +174,7 @@ RULES:
 
             # KPIs: still use local engine (fast + reliable)
             _, kpis = self.viz_engine.generate_dashboard(df)
-            print(f"✅ Gemini pre-analysis: {len(charts)} charts generated")
+            print(f"✅ Gemini pre-analysis (fast): {len(charts)} charts generated")
             return charts, kpis
 
         except Exception as e:
@@ -168,7 +183,7 @@ RULES:
             return self.viz_engine.generate_dashboard(df)
 
     # ================= CHAT PROCESSING =================
-    def process_prompt(self, session_id, message):
+    def process_prompt(self, session_id, message, language="English"):
         session = self.sessions.get(session_id)
         if not session:
             return {"success": False, "reply": "Session not found", "charts": None}
@@ -178,7 +193,7 @@ RULES:
 
         if self.gemini_enabled:
             try:
-                result = self._process_with_gemini(session, message)
+                result = self._process_with_gemini(session, message, language=language)
                 session["history"].append({"role": "assistant", "content": result.get("reply", "")})
                 return result
             except Exception as e:
@@ -189,7 +204,7 @@ RULES:
         session["history"].append({"role": "assistant", "content": result.get("reply", "")})
         return result
 
-    def _process_with_gemini(self, session, message):
+    def _process_with_gemini(self, session, message, language="English"):
         profiles = session.get("profiles", [])
         slicers = session.get("slicers", [])
         df = session["df"]
@@ -214,7 +229,12 @@ RULES:
             for m in recent_history
         ])
 
-        prompt = f"""You are an intelligent BI dashboard assistant. You help users explore their data by creating and modifying visualizations.
+        prompt = f"""## MANDATORY LANGUAGE RULE — READ THIS FIRST
+You MUST write the "reply" field ENTIRELY in **{language}**. Not English. Not a mix. 100% pure **{language}**.
+If the user selected {language}, you respond in {language} — even if the user typed in English.
+Violating this rule is an automatic failure.
+
+You are "Vidhur" — an intelligent BI dashboard assistant. You help users explore their data by creating and modifying visualizations.
 
 DATASET ({len(df)} rows, {len(df.columns)} columns):
 {col_info}
@@ -229,7 +249,7 @@ RECENT CONVERSATION:
 
 USER REQUEST: {message}
 
-Understand the user's intent and respond with a JSON object. You MUST respond in the SAME LANGUAGE as the user.
+Understand the user's intent and respond with a JSON object.
 
 AVAILABLE ACTIONS:
 1. "create_chart" — Create a new chart or replace charts based on user request
@@ -242,7 +262,8 @@ AVAILABLE ACTIONS:
 RESPONSE FORMAT (reply ONLY with this JSON):
 {{
   "action": "create_chart|change_chart|filter|reset_filter|theme|answer",
-  "reply": "Your friendly response to the user (SAME LANGUAGE as user)",
+  "reply": "Your friendly response — MUST BE ENTIRELY IN {language}",
+  "detected_language": "{language}",
   "charts": [
     {{
       "chart_type": "bar|line|area|pie|scatter|table",
@@ -268,12 +289,19 @@ RULES:
 - Column names MUST exactly match the dataset columns.
 - Titles should be simple and friendly (understandable by a 15-year-old).
 - Reply text should be warm, helpful, and conversational.
-- Always reply in the SAME language the user used.
+
+## FINAL LANGUAGE CHECK
+Before returning your response, verify: Is the "reply" field written ENTIRELY in **{language}**?
+If {language} is Hindi, the reply must be in Hindi (Devanagari script).
+If {language} is Marathi, the reply must be in Marathi (Devanagari script).
+If {language} is Tamil, the reply must be in Tamil script.
+Do NOT mix English words into the reply unless no {language} equivalent exists.
 """
         result = self._call_gemini_json(prompt)
 
         action = result.get("action", "answer")
         reply = result.get("reply", "Done! 👍")
+        detected_language = result.get("detected_language", language)
 
         # ===== ACTION HANDLING =====
         if action == "create_chart":
@@ -337,7 +365,7 @@ RULES:
 
         # "answer" action: just reply, no changes
 
-        return self._wrap_response(session, reply)
+        return self._wrap_response(session, reply, detected_language=detected_language)
 
     # ================= LOCAL FALLBACK =================
     def _process_local_advanced(self, session, message):
@@ -363,9 +391,9 @@ RULES:
         return self._wrap_response(session, "I can help you explore your data! Try asking me to 'show sales by region', 'change chart to pie', or 'filter for 2023'. 💡")
 
     # ================= HELPERS =================
-    def _wrap_response(self, session, reply):
+    def _wrap_response(self, session, reply, detected_language=None):
         active_page = session["pages"][session["active_page_idx"]]
-        return {
+        response = {
             "charts": active_page["charts"],
             "kpis": active_page["kpis"],
             "slicers": session["slicers"],
@@ -375,6 +403,9 @@ RULES:
             "reply": reply,
             "success": True
         }
+        if detected_language:
+            response["detected_language"] = detected_language
+        return response
 
     def _build_column_info(self, df, profiles):
         """Build a concise column summary for Gemini prompts."""

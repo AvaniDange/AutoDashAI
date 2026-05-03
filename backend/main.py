@@ -1,13 +1,18 @@
 import os
 import argparse
 import json
+import re
 import uvicorn
 import pandas as pd
 import numpy as np
 import io
 import tempfile
-from typing import List
-from fastapi import FastAPI, File, UploadFile, HTTPException, Body
+import base64
+import glob
+import shutil
+from datetime import datetime
+from typing import List, Optional
+from fastapi import FastAPI, File, UploadFile, HTTPException, Body, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.encoders import jsonable_encoder
@@ -334,17 +339,18 @@ async def start_dashboard(file: UploadFile = File(...)):
 @app.post("/api/dashboard/chat")
 async def dashboard_chat(payload: dict = Body(...)):
     """
-    payload: { "session_id": "...", "message": "..." }
+    payload: { "session_id": "...", "message": "...", "language": "Hindi" }
     """
     session_id = payload.get("session_id")
     message = payload.get("message")
+    language = payload.get("language", "English")
     
     if not session_id or not message:
         print("DEBUG: Chat request missing session_id or message")
         raise HTTPException(status_code=400, detail="Missing session_id or message")
         
-    print(f"DEBUG: Chat request for session {session_id}: {message}")
-    result = dashboard_agent.process_prompt(session_id, message)
+    print(f"DEBUG: Chat request for session {session_id} in language {language}: {message}")
+    result = dashboard_agent.process_prompt(session_id, message, language=language)
     
     if result is None or result.get("charts") is None:
         print(f"DEBUG: Session {session_id} not found or failed")
@@ -377,39 +383,213 @@ async def get_dashboard_state(session_id: str):
 from backend.insight_agent import insight_agent
 from backend.data_insights import generate_data_insights
 
+# Directory for saved visualizations
+SAVED_VIZ_DIR = os.path.join(os.path.dirname(__file__), "saved_visualizations")
+os.makedirs(SAVED_VIZ_DIR, exist_ok=True)
+
+
 @app.post("/api/insights/generate")
-async def generate_insights(file: UploadFile = File(...)):
-    """Generate AI-powered insights from a dashboard image or PDF."""
+async def generate_insights(file: UploadFile = File(...), language: str = Form(default="English")):
+    """Generate AI-powered insights from images, PDFs, Excel, CSV, or DOCX. Supports multilingual output."""
     try:
-        # Validate file type
-        allowed_types = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/pdf']
-        content_type = file.content_type
-        
-        if content_type not in allowed_types:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Unsupported file type: {content_type}. Please upload PNG, JPEG, WebP, or PDF."
-            )
-        
-        # Read file bytes
+        content_type = file.content_type or ""
+        filename = file.filename or "unknown"
+
+        # Determine file category
+        image_types = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp']
+        pdf_types = ['application/pdf']
+        data_types = [
+            'text/csv', 'application/csv',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ]
+        doc_types = [
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/msword',
+        ]
+
         file_bytes = await file.read()
-        
-        # Generate insights using the insight agent
-        insights = insight_agent.analyze_dashboard_image(
-            file_bytes=file_bytes,
-            mime_type=content_type,
-            filename=file.filename
-        )
-        
-        return {
-            "success": True,
-            "insights": insights
-        }
-        
+
+        # Route to appropriate analyzer
+        if content_type in image_types or content_type in pdf_types:
+            insights = insight_agent.analyze_dashboard_image(
+                file_bytes=file_bytes,
+                mime_type=content_type,
+                filename=filename,
+                language=language
+            )
+        elif content_type in data_types or filename.lower().endswith(('.csv', '.xlsx', '.xls')):
+            insights = insight_agent.analyze_data_file(
+                file_bytes=file_bytes,
+                mime_type=content_type,
+                filename=filename,
+                language=language
+            )
+        elif content_type in doc_types or filename.lower().endswith(('.docx', '.doc')):
+            # For docs, use the file converter to extract text, then treat as image-style analysis
+            temp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as tmp:
+                    tmp.write(file_bytes)
+                    temp_path = tmp.name
+                result = converter.process_file(temp_path)
+                if result['success'] and result.get('text_content'):
+                    # Use Gemini to analyze the text content (with model cascade)
+                    from backend.gemini_helpers import get_gemini_client, call_gemini
+                    client = get_gemini_client()
+                    if client:
+                        prompt = f"""## MANDATORY LANGUAGE RULE — READ THIS FIRST
+You MUST write the ENTIRE output in **{language}**. Every word of every field MUST be in **{language}**.
+Do NOT write in English. Do NOT mix languages. If you output even one English sentence, you have FAILED.
+
+Analyze this document text and provide 4-6 actionable business insights.
+You are "Vidhur" — a senior business advisor. Use simple language, give practical advice, and be encouraging.
+
+Each insight must have: title, description, why_it_matters, action_steps (ALL MUST be in {language}).
+
+Document text:
+{result['text_content'][:5000]}
+
+Reply with ONLY a JSON array in {language}: [{{"title": "...", "description": "...", "why_it_matters": "...", "action_steps": "..."}}]
+
+## FINAL CHECK: Verify ZERO English words in output. Language: {language}."""
+                        text = call_gemini(prompt, client=client)
+                        insights = json.loads(text.strip())
+                    else:
+                        insights = [{"title": "Document Loaded", "description": f"Extracted text from '{filename}'. Gemini API is needed for deeper analysis."}]
+                else:
+                    insights = [{"title": "No Content Found", "description": f"Could not extract readable content from '{filename}'."}]
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {content_type}. Supported: images, PDF, Excel, CSV, DOCX."
+            )
+
+        return {"success": True, "insights": insights}
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating insights: {str(e)}")
+
+
+@app.post("/api/visualizations/save")
+async def save_visualization(
+    file: UploadFile = File(...),
+    email: str = Form(...),
+    title: str = Form(default="Dashboard Snapshot"),
+    session_id: str = Form(default=""),
+):
+    """Save a dashboard visualization screenshot for a user."""
+    try:
+        user_dir = os.path.join(SAVED_VIZ_DIR, email.replace("@", "_at_").replace(".", "_"))
+        os.makedirs(user_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_title = re.sub(r'[^a-zA-Z0-9_\- ]', '', title).strip().replace(' ', '_')[:50]
+        filename = f"{safe_title}_{timestamp}.png"
+        filepath = os.path.join(user_dir, filename)
+
+        file_bytes = await file.read()
+        with open(filepath, "wb") as f:
+            f.write(file_bytes)
+
+        # Save metadata
+        meta_path = os.path.join(user_dir, f"{safe_title}_{timestamp}.json")
+        metadata = {
+            "title": title,
+            "filename": filename,
+            "session_id": session_id,
+            "saved_at": datetime.now().isoformat(),
+            "size_bytes": len(file_bytes),
+        }
+        with open(meta_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        return {"success": True, "message": "Visualization saved!", "filename": filename}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving visualization: {str(e)}")
+
+
+@app.get("/api/visualizations/list")
+async def list_visualizations(email: str = Query(...)):
+    """List saved visualizations for a user."""
+    try:
+        user_dir = os.path.join(SAVED_VIZ_DIR, email.replace("@", "_at_").replace(".", "_"))
+
+        if not os.path.exists(user_dir):
+            return {"success": True, "visualizations": []}
+
+        visualizations = []
+        meta_files = sorted(glob.glob(os.path.join(user_dir, "*.json")), reverse=True)
+
+        for meta_path in meta_files[:20]:  # limit to 20 most recent
+            try:
+                with open(meta_path, "r") as f:
+                    meta = json.load(f)
+
+                img_path = os.path.join(user_dir, meta["filename"])
+                if os.path.exists(img_path):
+                    # Create base64 thumbnail
+                    with open(img_path, "rb") as img_f:
+                        img_bytes = img_f.read()
+                    thumbnail = base64.b64encode(img_bytes).decode("utf-8")
+
+                    visualizations.append({
+                        "title": meta.get("title", "Untitled"),
+                        "filename": meta["filename"],
+                        "saved_at": meta.get("saved_at", ""),
+                        "thumbnail": f"data:image/png;base64,{thumbnail}",
+                    })
+            except Exception as e:
+                print(f"Error reading visualization metadata: {e}")
+                continue
+
+        return {"success": True, "visualizations": visualizations}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing visualizations: {str(e)}")
+
+
+@app.post("/api/visualizations/insights")
+async def insights_from_saved(payload: dict = Body(...)):
+    """Generate insights from a previously saved visualization."""
+    try:
+        email = payload.get("email", "")
+        filename = payload.get("filename", "")
+
+        if not email or not filename:
+            raise HTTPException(status_code=400, detail="Missing email or filename")
+
+        user_dir = os.path.join(SAVED_VIZ_DIR, email.replace("@", "_at_").replace(".", "_"))
+        filepath = os.path.join(user_dir, filename)
+
+        if not os.path.exists(filepath):
+            raise HTTPException(status_code=404, detail="Saved visualization not found")
+
+        with open(filepath, "rb") as f:
+            file_bytes = f.read()
+
+        language = payload.get("language", "English")
+
+        insights = insight_agent.analyze_dashboard_image(
+            file_bytes=file_bytes,
+            mime_type="image/png",
+            filename=filename,
+            language=language
+        )
+
+        return {"success": True, "insights": insights}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating insights: {str(e)}")
+
 
 @app.post("/api/dashboard/insights/{session_id}")
 async def get_dashboard_insights(session_id: str, payload: dict = Body(default={})):
@@ -436,7 +616,6 @@ async def get_dashboard_insights(session_id: str, payload: dict = Body(default={
         })
         
     except HTTPException:
-        # Re-raise standard HTTP errors (like 404) directly
         raise
     except Exception as e:
         print(f"DEBUG: CRITICAL ERROR in insight generation: {str(e)}")
@@ -690,7 +869,7 @@ if __name__ == "__main__":
     # Check if running as FastAPI server or command line tool
     if len(sys.argv) > 1 and not any(arg in sys.argv for arg in ['--input', '-i', '--help', '-h']):
         # Run as FastAPI server
-        uvicorn.run(app, host="0.0.0.0", port=8003)
+        uvicorn.run(app, host="0.0.0.0", port=8000)
     else:
         # Run as command line tool
         if len(sys.argv) > 1:

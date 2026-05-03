@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import logo from "../img/logo.png";
 
 const FileToTableConverter = () => {
@@ -7,6 +8,7 @@ const FileToTableConverter = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  const navigate = useNavigate();
 
   const API_BASE_URL = "http://127.0.0.1:8000";
 
@@ -112,7 +114,16 @@ const FileToTableConverter = () => {
           React.createElement("span", { className: "text-2xl font-bold text-blue-600" }, "AutoDashAI")
         ),
         React.createElement("nav", { className: "flex items-center space-x-6" },
-          React.createElement("a", { href: "#", className: "text-gray-600 hover:text-blue-600" }, "Help")
+          React.createElement("a", { href: "#", className: "text-gray-600 hover:text-blue-600" }, "Help"),
+          React.createElement("button", {
+            onClick: () => navigate('/homepage'),
+            className: "flex items-center justify-center w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 transition",
+            title: "Go to Home"
+          },
+            React.createElement("svg", { className: "w-6 h-6 text-gray-600", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" },
+              React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: 2, d: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" })
+            )
+          )
         )
       )
     ),

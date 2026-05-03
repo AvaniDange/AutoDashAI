@@ -8,6 +8,7 @@ import HomePage from "./pages/HomePage";
 import DataCleaner from "./pages/DataCleaner";
 import FileToTableConverter from "./pages/FileToTableConverter";
 import Dashboard from "./pages/Dashboard";
+import InsightGeneration from "./pages/InsightGeneration";
 
 function App() {
   return (
@@ -24,6 +25,7 @@ function App() {
           <Route path="/data-cleaning" element={<DataCleaner />} />
           <Route path="/ai-conversion" element={<FileToTableConverter />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/insight-generation" element={<InsightGeneration />} />
         </Routes>
       </div>
     </Router>
@@ -31,3 +33,4 @@ function App() {
 }
 
 export default App;
+

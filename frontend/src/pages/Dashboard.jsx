@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ChartGrid from '../components/ChartGrid';
 import ChatInterface from '../components/ChatInterface';
-import { LayoutDashboard, ArrowLeft, Download, BrainCircuit, X, Filter, Moon, Sun, ChevronRight, Layers, Languages } from 'lucide-react';
+import { LayoutDashboard, ArrowLeft, Download, BrainCircuit, X, Filter, Moon, Sun, ChevronRight, Layers, Languages, BookmarkPlus, Check, Lightbulb, Target, UserCircle2, Loader2 } from 'lucide-react';
 import html2canvas from 'html2canvas';
+import { auth } from '../firebase';
 import jsPDF from 'jspdf';
 
 const Dashboard = () => {
@@ -25,12 +26,14 @@ const Dashboard = () => {
     const [showInsights, setShowInsights] = useState(false);
     const [loadingInsights, setLoadingInsights] = useState(false);
     const [insightLanguage, setInsightLanguage] = useState('English');
+    const [savingViz, setSavingViz] = useState(false);
+    const [saveSuccess, setSaveSuccess] = useState(false);
 
     const API_BASE_URL = window.location.origin.includes('localhost')
         ? `http://localhost:8000`
         : `http://127.0.0.1:8000`;
 
-    const handleSendMessage = async (text) => {
+    const handleSendMessage = async (text, language = 'English') => {
         const userMsg = { role: 'user', content: text };
         setMessages(prev => [...prev, userMsg]);
         setLoading(true);
@@ -39,7 +42,7 @@ const Dashboard = () => {
             const response = await fetch(`${API_BASE_URL}/api/dashboard/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_id, message: text })
+                body: JSON.stringify({ session_id, message: text, language })
             });
 
             const data = await response.json();
@@ -52,7 +55,16 @@ const Dashboard = () => {
                 if (data.theme) setTheme(data.theme);
                 if (data.active_page_idx !== undefined) setActivePageIdx(data.active_page_idx);
 
-                const botMsg = { role: 'assistant', content: data.reply };
+                // Map detected_language back to a lang code for TTS
+                const LANG_CODE_MAP = {
+                    'English': 'en-IN', 'Hindi': 'hi-IN', 'Marathi': 'mr-IN',
+                    'Gujarati': 'gu-IN', 'Tamil': 'ta-IN', 'Telugu': 'te-IN',
+                    'Kannada': 'kn-IN', 'Bengali': 'bn-IN', 'Punjabi': 'pa-IN',
+                    'Malayalam': 'ml-IN', 'Odia': 'or-IN', 'Assamese': 'as-IN',
+                };
+                const detectedLangCode = LANG_CODE_MAP[data.detected_language] || null;
+
+                const botMsg = { role: 'assistant', content: data.reply, _detectedLangCode: detectedLangCode };
                 setMessages(prev => [...prev, botMsg]);
             } else {
                 setMessages(prev => [...prev, { role: 'assistant', content: "Sorry, I couldn't process that." }]);
@@ -127,6 +139,54 @@ const Dashboard = () => {
             alert(`Insight Error: ${error.message}`);
         } finally {
             setLoadingInsights(false);
+        }
+    };
+
+    const handleSaveVisualization = async () => {
+        const dashboardElement = document.getElementById('dashboard-content');
+        if (!dashboardElement) return;
+
+        const userEmail = auth.currentUser?.email;
+        if (!userEmail) {
+            alert('Please log in to save visualizations.');
+            return;
+        }
+
+        setSavingViz(true);
+        try {
+            const canvas = await html2canvas(dashboardElement, {
+                scale: 1.5,
+                useCORS: true,
+                logging: false,
+                backgroundColor: theme === 'dark' ? '#020617' : '#f9fafb',
+            });
+
+            // Convert canvas to blob
+            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+
+            const formData = new FormData();
+            formData.append('file', blob, 'dashboard_snapshot.png');
+            formData.append('email', userEmail);
+            formData.append('title', `Dashboard ${new Date().toLocaleDateString()}`);
+            formData.append('session_id', session_id);
+
+            const response = await fetch(`${API_BASE_URL}/api/visualizations/save`, {
+                method: 'POST',
+                body: formData,
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                setSaveSuccess(true);
+                setTimeout(() => setSaveSuccess(false), 3000);
+            } else {
+                alert('Failed to save visualization.');
+            }
+        } catch (error) {
+            console.error('Save visualization error:', error);
+            alert('Failed to save visualization. Please try again.');
+        } finally {
+            setSavingViz(false);
         }
     };
 
@@ -212,14 +272,38 @@ const Dashboard = () => {
                         <option value="Telugu">🇮🇳 తెలుగు</option>
                         <option value="Kannada">🇮🇳 ಕನ್ನಡ</option>
                         <option value="Bengali">🇮🇳 বাংলা</option>
+                        <option value="Punjabi">🇮🇳 ਪੰਜਾਬੀ</option>
+                        <option value="Malayalam">🇮🇳 മലയാളം</option>
+                        <option value="Odia">🇮🇳 ଓଡ଼ିଆ</option>
+                        <option value="Assamese">🇮🇳 অসমীয়া</option>
                     </select>
                     <button
                         onClick={handleGetInsights}
                         disabled={loadingInsights}
-                        className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all shadow-lg active:scale-95 disabled:opacity-50 font-bold text-sm"
+                        className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-xl hover:from-violet-500 hover:to-indigo-500 transition-all shadow-lg active:scale-95 disabled:opacity-50 font-bold text-sm"
                     >
-                        <BrainCircuit size={18} />
-                        {loadingInsights ? 'Analyzing...' : 'AI Insights'}
+                        <div className="w-5 h-5 rounded-md bg-white/20 flex items-center justify-center text-[9px] font-black">V</div>
+                        {loadingInsights ? 'Vidhur analyzing...' : 'Vidhur Insights'}
+                    </button>
+                    <button
+                        onClick={handleSaveVisualization}
+                        disabled={savingViz}
+                        className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all font-bold text-sm border ${saveSuccess
+                            ? 'bg-emerald-600 border-emerald-500 text-white'
+                            : savingViz
+                                ? 'opacity-50 cursor-not-allowed bg-slate-700 border-slate-600 text-slate-300'
+                                : theme === 'dark'
+                                    ? 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800 hover:border-indigo-500/50'
+                                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-indigo-300'
+                            }`}
+                    >
+                        {saveSuccess ? (
+                            <><Check size={18} /> Saved!</>
+                        ) : savingViz ? (
+                            <><BookmarkPlus size={18} className="animate-pulse" /> Saving...</>
+                        ) : (
+                            <><BookmarkPlus size={18} /> Save</>
+                        )}
                     </button>
                     <button
                         onClick={handleDownloadPDF}
@@ -230,6 +314,17 @@ const Dashboard = () => {
                     >
                         <Download size={18} />
                         Export
+                    </button>
+                    {/* Profile Icon → Home */}
+                    <button
+                        onClick={() => navigate('/homepage')}
+                        className={`p-2.5 rounded-xl transition-all border ${theme === 'dark'
+                            ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'
+                            : 'bg-gray-100 border-transparent text-gray-600 hover:bg-gray-200 hover:text-indigo-600'
+                        }`}
+                        title="Go to Home"
+                    >
+                        <UserCircle2 size={20} />
                     </button>
                 </div>
             </header>
@@ -349,15 +444,14 @@ const Dashboard = () => {
                         <div className={`flex items-center justify-between p-8 border-b ${theme === 'dark' ? 'border-slate-800' : 'border-gray-100'
                             }`}>
                             <div className="flex items-center gap-4">
-                                <div className={`p-3 rounded-2xl ${theme === 'dark' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-purple-100 text-purple-600'
-                                    }`}>
-                                    <BrainCircuit className="w-8 h-8" />
+                                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-violet-600 via-indigo-500 to-cyan-400 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-indigo-500/30">
+                                    V
                                 </div>
                                 <div>
                                     <h2 className={`text-2xl font-black ${theme === 'dark' ? 'text-slate-100' : 'text-gray-900'
-                                        }`}>Data Intelligence</h2>
+                                        }`}>Vidhur's Analysis</h2>
                                     <p className={`text-sm font-bold ${theme === 'dark' ? 'text-slate-500' : 'text-gray-400'
-                                        }`}>AI-powered analysis of your dashboard</p>
+                                        }`}>Deep business intelligence from your dashboard</p>
                                 </div>
                             </div>
                             <button onClick={() => setShowInsights(false)} className={`p-2 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-slate-800 text-slate-500' : 'hover:bg-gray-100 text-gray-400'
@@ -368,14 +462,43 @@ const Dashboard = () => {
                         <div className="p-8 overflow-y-auto">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 {insights && insights.map((insight, index) => (
-                                    <div key={index} className={`p-6 rounded-[2rem] border transition-all hover:scale-[1.02] ${theme === 'dark'
+                                    <div key={index} className={`p-6 rounded-[2rem] border transition-all hover:scale-[1.01] ${theme === 'dark'
                                         ? 'bg-slate-800/50 border-slate-700 hover:border-indigo-500/50'
                                         : 'bg-gradient-to-br from-indigo-50/50 to-purple-50/50 border-indigo-100 hover:border-indigo-200'
                                         }`}>
+                                        {/* Title */}
                                         <h3 className={`text-base font-black mb-3 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-900'
                                             }`}>{insight.title}</h3>
-                                        <p className={`text-sm leading-relaxed font-medium ${theme === 'dark' ? 'text-slate-300' : 'text-indigo-700'
+
+                                        {/* Description */}
+                                        <p className={`text-sm leading-relaxed font-medium mb-4 ${theme === 'dark' ? 'text-slate-300' : 'text-indigo-700'
                                             }`}>{insight.description}</p>
+
+                                        {/* Why It Matters */}
+                                        {insight.why_it_matters && (
+                                            <div className={`p-3 rounded-xl mb-3 ${theme === 'dark' ? 'bg-amber-500/5 border border-amber-500/10' : 'bg-amber-50 border border-amber-100'}`}>
+                                                <p className={`text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5 ${theme === 'dark' ? 'text-amber-400' : 'text-amber-600'}`}>
+                                                    <Lightbulb size={12} />
+                                                    Why This Matters
+                                                </p>
+                                                <p className={`text-sm leading-relaxed ${theme === 'dark' ? 'text-slate-400' : 'text-amber-700'}`}>
+                                                    {insight.why_it_matters}
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        {/* Action Steps */}
+                                        {insight.action_steps && (
+                                            <div className={`p-3 rounded-xl ${theme === 'dark' ? 'bg-emerald-500/5 border border-emerald-500/10' : 'bg-emerald-50 border border-emerald-100'}`}>
+                                                <p className={`text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5 ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                                                    <Target size={12} />
+                                                    What To Do Next
+                                                </p>
+                                                <p className={`text-sm leading-relaxed ${theme === 'dark' ? 'text-slate-400' : 'text-emerald-700'}`}>
+                                                    {insight.action_steps}
+                                                </p>
+                                            </div>
+                                        )}
                                     </div>
                                 ))}
                             </div>
